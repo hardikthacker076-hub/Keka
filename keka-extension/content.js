@@ -356,7 +356,16 @@
                     outline: none; transition: all 0.2s; color-scheme: dark; font-family: inherit;
                 }
                 .keka-input:focus { border-color: rgba(52,152,219,0.7); background: rgba(52,152,219,0.08); }
-                .keka-input::-webkit-calendar-picker-indicator { filter: invert(1); opacity: 0.5; cursor: pointer; }
+                .keka-input::-webkit-calendar-picker-indicator {
+                    filter: invert(1) brightness(1.5);
+                    opacity: 0.85;
+                    cursor: pointer;
+                    padding: 2px;
+                }
+                .keka-input::-webkit-calendar-picker-indicator:hover {
+                    opacity: 1;
+                    filter: invert(1) brightness(2);
+                }
                 .keka-btn {
                     width: 100%; padding: 10px; border: none; border-radius: 8px;
                     color: #fff; cursor: pointer; font-size: 11px; font-weight: 600;
@@ -492,12 +501,19 @@
             e.stopPropagation();
         };
 
-        // Close panel when clicking outside
-        document.addEventListener('click', (e) => {
-            if (!iconButton.contains(e.target)) {
-                panel.style.display = 'none';
-            }
-        });
+        // Register global close-on-outside-click only ONCE per page
+        if (!window._kekaOutsideClickRegistered) {
+            window._kekaOutsideClickRegistered = true;
+            document.addEventListener('click', () => {
+                const p = document.getElementById('keka-helper-panel');
+                const btn = document.getElementById('keka-helper-icon');
+                if (p && p.style.display === 'block') {
+                    // Only close if click was outside both icon and panel
+                    // (icon/panel clicks are stopped via stopPropagation above)
+                    p.style.display = 'none';
+                }
+            });
+        }
 
         // Range Calculation Logic
         const calcRangeBtn = document.getElementById('keka-calc-range');
