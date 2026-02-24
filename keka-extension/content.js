@@ -1098,6 +1098,7 @@
         const weeklyRemainEffective = targetEffective - totalEffective;
 
         let loginTime = null;
+        let lastActivePunchIn = null; // Most recent IN with MISSING out (Keka hasn't counted yet)
 
         if (todayRow) {
             // Inject hidden style — also moves element off-screen so it never visually renders
@@ -1121,8 +1122,17 @@
                         const firstTime = matches[0];
                         if (!firstTime.startsWith("0:00") && !firstTime.startsWith("00:00")) {
                             loginTime = parseTime(firstTime);
-                            if (loginTime) break;
                         }
+
+                        // Find last IN punch that has a MISSING out
+                        // Pattern: a time followed (with any chars in between) by the word MISSING
+                        const activePunches = [...txt.matchAll(/(\d{1,2}:\d{2}:\d{2}(?:\s?[AP]M)?)[^\d\n]{0,30}MISSING/gi)];
+                        if (activePunches.length > 0) {
+                            const lastMatch = activePunches[activePunches.length - 1];
+                            lastActivePunchIn = parseTime(lastMatch[1]);
+                        }
+
+                        if (loginTime) break;
                     }
                 }
             }
@@ -1153,27 +1163,37 @@
             const catchupGross = expectedGrossPrev - prevDaysGross;
             const catchupEffective = expectedEffPrev - prevDaysEffective;
 
-            // Today's FIXED personal target (accounts for catchup from previous days)
+            // Today's personal target (accounts for catchup from previous days)
             const todayGrossTarget = Math.max(0, 540 + catchupGross);
             const todayEffTarget = Math.max(0, 480 + catchupEffective);
 
-            // LEFT: how many minutes remain toward today's personal target
-            const leftGross = Math.max(0, todayGrossTarget - todayGross);
-            const leftEffective = Math.max(0, todayEffTarget - todayEffective);
+            // LIVE ADJUSTMENT: Keka doesn't count in-progress punch sessions.
+            // If there's an active IN with MISSING out, add (now - lastPunchIn) to the worked totals.
+            let liveMinutes = 0;
+            if (lastActivePunchIn) {
+                liveMinutes = Math.max(0, Math.floor((now.getTime() - lastActivePunchIn.getTime()) / 60000));
+                console.log(`Keka Helper: Live session +${liveMinutes}m since ${formatTime(lastActivePunchIn)}`);
+            }
+            const todayGrossLive = todayGross + liveMinutes;
+            const todayEffectiveLive = todayEffective + liveMinutes;
+
+            // LEFT: how many minutes remain (using live-adjusted worked hours)
+            const leftGross = Math.max(0, todayGrossTarget - todayGrossLive);
+            const leftEffective = Math.max(0, todayEffTarget - todayEffectiveLive);
 
             // OUT TIME: NOW + remaining (updates dynamically — breaks push it later)
             const outTimeGross = new Date(now.getTime() + leftGross * 60000);
             const outTimeEffective = new Date(now.getTime() + leftEffective * 60000);
 
             let logoffGrossStr = "Wait...";
-            if (todayGrossTarget === 0 || todayGross >= todayGrossTarget) {
+            if (todayGrossTarget === 0 || todayGrossLive >= todayGrossTarget) {
                 logoffGrossStr = "GOAL MET! 🎉";
             } else {
                 logoffGrossStr = formatTime(outTimeGross);
             }
 
             let logoffEffectiveStr = "Wait...";
-            if (todayEffTarget === 0 || todayEffective >= todayEffTarget) {
+            if (todayEffTarget === 0 || todayEffectiveLive >= todayEffTarget) {
                 logoffEffectiveStr = "GOAL MET! 🎉";
                 if (!window.kekaCheerPlayed) {
                     playSuccessSound();
