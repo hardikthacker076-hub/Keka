@@ -1153,17 +1153,17 @@
             const catchupGross = expectedGrossPrev - prevDaysGross;
             const catchupEffective = expectedEffPrev - prevDaysEffective;
 
-            // Today's FIXED personal target (set at login, doesn't change as you work)
+            // Today's FIXED personal target (accounts for catchup from previous days)
             const todayGrossTarget = Math.max(0, 540 + catchupGross);
             const todayEffTarget = Math.max(0, 480 + catchupEffective);
 
-            // OUT TIME: fixed once at login
-            const outTimeGross = new Date(loginTime.getTime() + todayGrossTarget * 60000);
-            const outTimeEffective = new Date(loginTime.getTime() + todayEffTarget * 60000);
-
-            // LEFT: live (today's worked vs today's personal target)
+            // LEFT: how many minutes remain toward today's personal target
             const leftGross = Math.max(0, todayGrossTarget - todayGross);
             const leftEffective = Math.max(0, todayEffTarget - todayEffective);
+
+            // OUT TIME: NOW + remaining (updates dynamically — breaks push it later)
+            const outTimeGross = new Date(now.getTime() + leftGross * 60000);
+            const outTimeEffective = new Date(now.getTime() + leftEffective * 60000);
 
             let logoffGrossStr = "Wait...";
             if (todayGrossTarget === 0 || todayGross >= todayGrossTarget) {
