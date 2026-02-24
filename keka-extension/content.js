@@ -359,14 +359,15 @@
                 }
                 .keka-input:focus { border-color: rgba(52,152,219,0.7); background: rgba(52,152,219,0.08); }
                 .keka-input::-webkit-calendar-picker-indicator {
-                    filter: invert(1) brightness(1.5);
-                    opacity: 0.85;
+                    filter: invert(1) brightness(2);
+                    opacity: 1;
                     cursor: pointer;
                     padding: 2px;
+                    transform: scale(1.1);
                 }
                 .keka-input::-webkit-calendar-picker-indicator:hover {
-                    opacity: 1;
-                    filter: invert(1) brightness(2);
+                    filter: invert(1) brightness(3);
+                    transform: scale(1.3);
                 }
                 .keka-btn {
                     width: 100%; padding: 10px; border: none; border-radius: 8px;
@@ -503,14 +504,18 @@
             e.stopPropagation();
         };
 
-        // Outside-click handler: remove old one first, then add fresh one
-        // This ensures only ONE listener is ever active (no accumulation across recalculates)
+        // Outside-click handler: remove old one, add fresh one WITH target check
         if (window._kekaOutsideClickHandler) {
             document.removeEventListener('click', window._kekaOutsideClickHandler);
         }
-        window._kekaOutsideClickHandler = () => {
+        window._kekaOutsideClickHandler = (e) => {
             const p = document.getElementById('keka-helper-panel');
-            if (p) p.style.display = 'none';
+            const btn = document.getElementById('keka-helper-icon');
+            if (!p || p.style.display !== 'block') return;
+            // Don't close if click was on the icon (let onclick toggle it) or inside the panel
+            if (btn && btn.contains(e.target)) return;
+            if (p && p.contains(e.target)) return;
+            p.style.display = 'none';
         };
         document.addEventListener('click', window._kekaOutsideClickHandler);
 
