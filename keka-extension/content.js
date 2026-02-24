@@ -1076,10 +1076,13 @@
         let loginTime = null;
 
         if (todayRow) {
-            // Inject hidden style so the punch dropdown doesn't flash visually
+            // Inject hidden style — also moves element off-screen so it never visually renders
             const hideDropStyle = document.createElement('style');
-            hideDropStyle.textContent = '.dropdown-menu-logs { visibility: hidden !important; opacity: 0 !important; pointer-events: none !important; }';
+            hideDropStyle.textContent = '.dropdown-menu-logs { visibility: hidden !important; opacity: 0 !important; pointer-events: none !important; position: fixed !important; top: -9999px !important; left: -9999px !important; }';
             document.head.appendChild(hideDropStyle);
+
+            // Wait 80ms for the browser to actually apply the CSS before clicking
+            await new Promise(r => setTimeout(r, 80));
 
             todayRow.click();
 
@@ -1087,7 +1090,9 @@
                 await new Promise(r => setTimeout(r, 250));
                 const dropdown = document.querySelector('.dropdown-menu-logs');
                 if (dropdown) {
-                    const matches = dropdown.innerText.match(/(\d{1,2}:\d{2}:\d{2}(?:\s?[AP]M)?)/g);
+                    // Use textContent (works on hidden/off-screen elements, unlike innerText)
+                    const txt = dropdown.textContent || '';
+                    const matches = txt.match(/(\d{1,2}:\d{2}:\d{2}(?:\s?[AP]M)?)/g);
                     if (matches && matches.length > 0) {
                         const firstTime = matches[0];
                         if (!firstTime.startsWith("0:00") && !firstTime.startsWith("00:00")) {
