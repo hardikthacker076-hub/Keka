@@ -1124,12 +1124,24 @@
                             loginTime = parseTime(firstTime);
                         }
 
-                        // Find last IN punch that has a MISSING out
+                        // Find latest IN punch that has a MISSING out
                         // Pattern: a time followed (with any chars in between) by the word MISSING
                         const activePunches = [...txt.matchAll(/(\d{1,2}:\d{2}:\d{2}(?:\s?[AP]M)?)[^\d\n]{0,30}MISSING/gi)];
-                        if (activePunches.length > 0) {
-                            const lastMatch = activePunches[activePunches.length - 1];
-                            lastActivePunchIn = parseTime(lastMatch[1]);
+                        let maxTime = null;
+                        let maxVal = -1;
+
+                        for (const punchMatch of activePunches) {
+                            const pTime = parseTime(punchMatch[1]);
+                            if (pTime) {
+                                const pVal = pTime.getTime();
+                                if (pVal > maxVal) {
+                                    maxVal = pVal;
+                                    maxTime = pTime;
+                                }
+                            }
+                        }
+                        if (maxTime) {
+                            lastActivePunchIn = maxTime;
                         }
 
                         if (loginTime) break;
