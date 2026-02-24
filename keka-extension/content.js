@@ -248,8 +248,10 @@
             iconButton.style.borderColor = 'rgba(243,156,18,0.4)';
         };
 
-        // Inject Styles for Modern UI
-        if (!document.getElementById('keka-helper-styles')) {
+        // Always remove and re-inject styles so extension updates apply immediately
+        const oldStyle = document.getElementById('keka-helper-styles');
+        if (oldStyle) oldStyle.remove();
+        if (true) {
             const style = document.createElement('style');
             style.id = 'keka-helper-styles';
             style.textContent = `
@@ -501,19 +503,16 @@
             e.stopPropagation();
         };
 
-        // Register global close-on-outside-click only ONCE per page
-        if (!window._kekaOutsideClickRegistered) {
-            window._kekaOutsideClickRegistered = true;
-            document.addEventListener('click', () => {
-                const p = document.getElementById('keka-helper-panel');
-                const btn = document.getElementById('keka-helper-icon');
-                if (p && p.style.display === 'block') {
-                    // Only close if click was outside both icon and panel
-                    // (icon/panel clicks are stopped via stopPropagation above)
-                    p.style.display = 'none';
-                }
-            });
+        // Outside-click handler: remove old one first, then add fresh one
+        // This ensures only ONE listener is ever active (no accumulation across recalculates)
+        if (window._kekaOutsideClickHandler) {
+            document.removeEventListener('click', window._kekaOutsideClickHandler);
         }
+        window._kekaOutsideClickHandler = () => {
+            const p = document.getElementById('keka-helper-panel');
+            if (p) p.style.display = 'none';
+        };
+        document.addEventListener('click', window._kekaOutsideClickHandler);
 
         // Range Calculation Logic
         const calcRangeBtn = document.getElementById('keka-calc-range');
