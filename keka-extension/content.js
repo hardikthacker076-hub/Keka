@@ -767,6 +767,17 @@
 
                                     rangeGross += gM;
                                     rangeEffective += eM;
+
+                                    // LIVE ADJUSTMENT FOR RANGE: If this row is TODAY, add live session minutes
+                                    const isToday = rowDate.toDateString() === new Date().toDateString();
+                                    if (isToday && window.kekaLastActivePunchIn) {
+                                        const liveMin = Math.max(0, Math.floor((new Date().getTime() - window.kekaLastActivePunchIn.getTime()) / 60000));
+                                        if (liveMin > 0) {
+                                            console.log(`Keka Helper Range: Adding live session +${liveMin}m to Today's row`);
+                                            rangeGross += liveMin;
+                                            rangeEffective += liveMin;
+                                        }
+                                    }
                                 } else {
                                     // Holiday or absent - no hours to add
                                 }
@@ -1142,6 +1153,7 @@
                         }
                         if (maxTime) {
                             lastActivePunchIn = maxTime;
+                            window.kekaLastActivePunchIn = maxTime; // Store globally for range calculator
                         }
 
                         if (loginTime) break;
