@@ -515,6 +515,10 @@
             // Don't close if click was on the icon (let onclick toggle it) or inside the panel
             if (btn && btn.contains(e.target)) return;
             if (p && p.contains(e.target)) return;
+            // Don't close if a date picker inside the panel is actively focused
+            // (native date picker UI fires document clicks that don't have panel targets)
+            const active = document.activeElement;
+            if (active && active.type === 'date' && p.contains(active)) return;
             p.style.display = 'none';
         };
         document.addEventListener('click', window._kekaOutsideClickHandler);
