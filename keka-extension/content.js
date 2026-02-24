@@ -1234,8 +1234,8 @@
                 effectiveLogoff: logoffEffectiveStr,
                 grossLeft: toHm(leftGross),
                 effectiveLeft: toHm(leftEffective),
-                grossWorked: toHm(todayGross),
-                effectiveWorked: toHm(todayEffective),
+                grossWorked: toHm(todayGrossLive),
+                effectiveWorked: toHm(todayEffectiveLive),
                 avgNote: avgNote
             };
 
