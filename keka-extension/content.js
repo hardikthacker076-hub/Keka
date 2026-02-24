@@ -1209,17 +1209,20 @@
 
 
 
-            // Visual Feedback / Gamification - based on weekly Effective Hours
-            const isAhead = weeklyRemainEffective <= 0;
-            const isBehind = weeklyRemainEffective > 0;
+            // Visual Feedback / Gamification - based on TODAY's target
+            // Confetti: today's effective goal is met
+            // Sad: week is over AND weekly effective goal wasn't met
+            const todayGoalMet = leftEffective === 0;
+            const weekIsOver = todayIndex === 0 || todayIndex === 6;
+            const weekGoalMissed = weeklyRemainEffective > 0;
 
             if (!window.kekaEmojiShown) {
                 window.kekaEmojiShown = true;
-                if (isAhead) {
-                    console.log("Keka Helper: Ahead on Effective! Confetti.");
+                if (todayGoalMet) {
+                    console.log("Keka Helper: Today's goal met! Confetti.");
                     triggerConfetti();
-                } else if (isBehind) {
-                    console.log("Keka Helper: Behind on Effective. Sad Emoji.");
+                } else if (weekIsOver && weekGoalMissed) {
+                    console.log("Keka Helper: Week over, goal not met. Sad Emoji.");
                     triggerSadEmoji();
                 }
             }
