@@ -41,12 +41,22 @@ chrome.storage.onChanged.addListener((changes, namespace) => {
 
 // Variable to hold the latest known status
 let latestStatus = null;
+let lastUpdateTime = 0;
 
 // Listen for the alarm to trigger
 chrome.alarms.onAlarm.addListener((alarm) => {
     if (alarm.name === 'kekaNotifier') {
         chrome.storage.local.get(['kekaNotifyEnabled'], (data) => {
             if (data.kekaNotifyEnabled && latestStatus) {
+                // Check if data is fresh. The content script sends updates every 60s.
+                // If the data is older than 5 minutes, it means the Keka tab is closed.
+                // We should NOT send a notification if the tab is closed, to avoid stale/yesterday's data.
+                const timeSinceLastUpdate = Date.now() - lastUpdateTime;
+                if (timeSinceLastUpdate > 5 * 60 * 1000) {
+                    console.log("Keka Helper: Data is stale (Keka tab closed). Suppressing notification.");
+                    return;
+                }
+
                 // Determine the context
                 let message = "";
                 if (latestStatus.isGoalMet) {
@@ -74,5 +84,6 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (request.action === 'UPDATE_KEKA_STATUS') {
         latestStatus = request.data;
+        lastUpdateTime = Date.now();
     }
 });
