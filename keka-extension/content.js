@@ -488,6 +488,9 @@
             <div style="font-size: 11px; color: rgba(255,255,255,0.4); text-align: center; margin-top: 15px;">
                 <div style="display:flex; justify-content:space-between; align-items:center; background: rgba(0,0,0,0.2); padding: 8px 12px; border-radius: 6px; margin-bottom: 8px;">
                     <span style="font-weight: 500; color: rgba(255,255,255,0.7);">Desktop Notifications</span>
+                    <div style="flex-grow: 1; margin: 0 8px; text-align: left;">
+                        <span id="keka-notify-timer" style="font-size: 10px; color: #f1c40f; display: block; height: 12px; font-variant-numeric: tabular-nums;">--:--</span>
+                    </div>
                     <select id="keka-notify-select" style="background: rgba(255,255,255,0.1); color: white; border: 1px solid rgba(255,255,255,0.2); border-radius: 4px; padding: 2px 5px; font-size: 11px; cursor: pointer; outline: none;">
                         <option value="0" style="background: #1e2532;">Off</option>
                         <option value="30" style="background: #1e2532;">Every 30m</option>
@@ -503,35 +506,65 @@
         actionsSection.appendChild(iconButton);
         iconButton.appendChild(panel);
 
-        // --- NEW: Notification Settings Logic ---
+        // --- NEW: Notification Settings Logic & Timer ---
         const notifySelect = document.getElementById('keka-notify-select');
+        const timerSpan = document.getElementById('keka-notify-timer');
+        let timerInterval = null;
+
+        const updateTimerDisplay = () => {
+            chrome.runtime.sendMessage({ action: 'GET_ALARM_TIME' }, (response) => {
+                if (chrome.runtime.lastError || !response || !response.time) {
+                    timerSpan.innerText = "";
+                } else {
+                    const msLeft = response.time - Date.now();
+                    if (msLeft > 0) {
+                        const mins = Math.floor(msLeft / 60000);
+                        const secs = Math.floor((msLeft % 60000) / 1000);
+                        timerSpan.innerText = `Next in: ${mins}m ${secs.toString().padStart(2, '0')}s`;
+                    } else {
+                        timerSpan.innerText = "Syncing...";
+                    }
+                }
+            });
+        };
+
         if (notifySelect) {
             // Load saved setting
             chrome.storage.local.get(['kekaNotifyInterval', 'kekaNotifyEnabled'], (data) => {
                 if (data.kekaNotifyEnabled === false || data.kekaNotifyInterval === 0) {
                     notifySelect.value = "0";
+                    timerSpan.innerText = "";
                 } else if (data.kekaNotifyInterval === 60) {
                     notifySelect.value = "60";
+                    updateTimerDisplay();
+                    timerInterval = setInterval(updateTimerDisplay, 1000);
                 } else {
                     notifySelect.value = "30"; // Default
+                    updateTimerDisplay();
+                    timerInterval = setInterval(updateTimerDisplay, 1000);
                 }
             });
 
             // Save on change
             notifySelect.addEventListener('change', (e) => {
                 const val = parseInt(e.target.value);
+                if (timerInterval) clearInterval(timerInterval);
+
                 if (val === 0) {
                     chrome.storage.local.set({ kekaNotifyEnabled: false, kekaNotifyInterval: 0 });
+                    timerSpan.innerText = "";
                 } else {
                     chrome.storage.local.set({ kekaNotifyEnabled: true, kekaNotifyInterval: val });
+                    // Briefly show 'Syncing' until new alarm registers
+                    timerSpan.innerText = "Syncing...";
+                    setTimeout(() => {
+                        updateTimerDisplay();
+                        timerInterval = setInterval(updateTimerDisplay, 1000);
+                    }, 500);
                 }
             });
         }
         // ----------------------------------------
-
-        // Append icon to actions section
-        actionsSection.appendChild(iconButton);
-        iconButton.appendChild(panel);
 
         // Toggle panel on click
         iconButton.onclick = (e) => {

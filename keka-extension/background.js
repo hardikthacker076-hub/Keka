@@ -85,5 +85,14 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (request.action === 'UPDATE_KEKA_STATUS') {
         latestStatus = request.data;
         lastUpdateTime = Date.now();
+    } else if (request.action === 'GET_ALARM_TIME') {
+        chrome.alarms.get('kekaNotifier', (alarm) => {
+            if (alarm) {
+                sendResponse({ time: alarm.scheduledTime });
+            } else {
+                sendResponse({ time: null });
+            }
+        });
+        return true; // Keep the message channel open for the async response
     }
 });
