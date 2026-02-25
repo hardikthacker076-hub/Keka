@@ -88,12 +88,13 @@ chrome.alarms.onAlarm.addListener((alarm) => {
                 const notifId = 'keka-notify-' + Date.now();
                 chrome.notifications.create(notifId, {
                     type: 'basic',
-                    iconUrl: chrome.runtime.getURL('icon.png'),
+                    iconUrl: 'icon.png',
                     title: 'Keka Target',
                     message: message
                 }, (notificationId) => {
                     if (chrome.runtime.lastError) {
-                        console.error("Keka Helper: Failed to create notification:", JSON.stringify(chrome.runtime.lastError, null, 2));
+                        const errStr = JSON.stringify(chrome.runtime.lastError, null, 2) || chrome.runtime.lastError.message;
+                        console.error("Keka Helper: Failed to create notification:", errStr);
                     } else {
                         console.log("Keka Helper: Notification shown successfully! ID:", notificationId);
                     }
