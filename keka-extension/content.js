@@ -1050,9 +1050,9 @@
                     } else {
                         todayEffective = parseDuration(grossSpan.innerText);
                     }
+                    totalGross += todayGross;
+                    totalEffective += todayEffective;
                 }
-                totalGross += todayGross;
-                totalEffective += todayEffective;
                 continue;
             }
 
