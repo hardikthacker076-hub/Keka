@@ -1,13 +1,20 @@
 {
   "manifest_version": 3,
   "name": "Keka 45h Target Calculator",
-  "version": "1.48",
+  "version": "1.49",
   "description": "Calculates daily logoff time to hit 45 hours weekly gross.",
-  "permissions": [],
+  "permissions": [
+    "notifications",
+    "alarms",
+    "storage"
+  ],
   "host_permissions": [
     "https://*.keka.com/*",
     "https://marutitech.keka.com/*"
   ],
+  "background": {
+    "service_worker": "background.js"
+  },
   "content_scripts": [
     {
       "matches": [

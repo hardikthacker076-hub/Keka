@@ -485,8 +485,49 @@
             <button id="keka-refresh-panel" class="keka-btn keka-btn-secondary">
                 ↻ Refresh Today's Data
             </button>
+            <div style="font-size: 11px; color: rgba(255,255,255,0.4); text-align: center; margin-top: 15px;">
+                <div style="display:flex; justify-content:space-between; align-items:center; background: rgba(0,0,0,0.2); padding: 8px 12px; border-radius: 6px; margin-bottom: 8px;">
+                    <span style="font-weight: 500; color: rgba(255,255,255,0.7);">Desktop Notifications</span>
+                    <select id="keka-notify-select" style="background: rgba(255,255,255,0.1); color: white; border: 1px solid rgba(255,255,255,0.2); border-radius: 4px; padding: 2px 5px; font-size: 11px; cursor: pointer; outline: none;">
+                        <option value="0" style="background: #1e2532;">Off</option>
+                        <option value="30" style="background: #1e2532;">Every 30m</option>
+                        <option value="60" style="background: #1e2532;">Every 60m</option>
+                    </select>
+                </div>
+                v${chrome.runtime.getManifest().version} | Made to hit 45h accurately
+            </div>
             </div><!-- end keka-panel-body -->
         `;
+
+        // Append icon to actions section
+        actionsSection.appendChild(iconButton);
+        iconButton.appendChild(panel);
+
+        // --- NEW: Notification Settings Logic ---
+        const notifySelect = document.getElementById('keka-notify-select');
+        if (notifySelect) {
+            // Load saved setting
+            chrome.storage.local.get(['kekaNotifyInterval', 'kekaNotifyEnabled'], (data) => {
+                if (data.kekaNotifyEnabled === false || data.kekaNotifyInterval === 0) {
+                    notifySelect.value = "0";
+                } else if (data.kekaNotifyInterval === 60) {
+                    notifySelect.value = "60";
+                } else {
+                    notifySelect.value = "30"; // Default
+                }
+            });
+
+            // Save on change
+            notifySelect.addEventListener('change', (e) => {
+                const val = parseInt(e.target.value);
+                if (val === 0) {
+                    chrome.storage.local.set({ kekaNotifyEnabled: false, kekaNotifyInterval: 0 });
+                } else {
+                    chrome.storage.local.set({ kekaNotifyEnabled: true, kekaNotifyInterval: val });
+                }
+            });
+        }
+        // ----------------------------------------
 
         // Append icon to actions section
         actionsSection.appendChild(iconButton);
@@ -1190,6 +1231,24 @@
             dataToCache.effectiveWorked,
             dataToCache.avgNote
         );
+
+        // Send calculated status to the background worker for notifications
+        try {
+            chrome.runtime.sendMessage({
+                action: 'UPDATE_KEKA_STATUS',
+                data: {
+                    effectiveLogoffStr: dataToCache.effectiveLogoff,
+                    isGoalMet: dataToCache.effectiveLogoff.includes("GOAL MET"),
+                    isWeekOver: dataToCache.effectiveLogoff.includes("Week Over")
+                }
+            }, response => {
+                if (chrome.runtime.lastError) {
+                    console.log("Keka Helper Background Worker not ready yet.");
+                }
+            });
+        } catch (e) {
+            console.log("Keka Helper message error:", e);
+        }
     }
 
     // --- VISUAL EFFECTS ---
