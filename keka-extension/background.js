@@ -64,7 +64,6 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 
                 chrome.notifications.create({
                     type: 'basic',
-                    iconUrl: 'icon.png', // Fallback if no specific icon exists
                     title: 'Keka Target',
                     message: message,
                     priority: 2,
