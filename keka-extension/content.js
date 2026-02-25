@@ -879,7 +879,7 @@
 
         // Always reset live session state to ensure we don't hold onto old "MISSING" punches
         // if the user has officially punched OUT since the last calculation.
-        lastActivePunchIn = null;
+        let lastActivePunchIn = null;
         window.kekaLastActivePunchIn = null;
 
         // Only run on attendance log page
@@ -1034,7 +1034,7 @@
         const weeklyRemainEffective = targetEffective - totalEffective;
 
         let loginTime = null;
-        let lastActivePunchIn = null; // Most recent IN with MISSING out (Keka hasn't counted yet)
+        // lastActivePunchIn is declared and reset at the top of the function
 
         if (todayRow) {
             // Inject hidden style — also moves element off-screen so it never visually renders
