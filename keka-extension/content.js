@@ -13,6 +13,7 @@
 
     let hasCalculated = false;
     let observer = null;
+    let lastActivePunchIn = null; // Global state for live tracking
 
     function parseDuration(text) {
         if (!text) return 0;
@@ -493,6 +494,7 @@
                     </div>
                     <select id="keka-notify-select" style="background: rgba(255,255,255,0.1); color: white; border: 1px solid rgba(255,255,255,0.2); border-radius: 4px; padding: 2px 5px; font-size: 11px; cursor: pointer; outline: none;">
                         <option value="0" style="background: #1e2532;">Off</option>
+                        <option value="1" style="background: #1e2532;">Test 1m</option>
                         <option value="30" style="background: #1e2532;">Every 30m</option>
                         <option value="60" style="background: #1e2532;">Every 60m</option>
                     </select>
@@ -512,20 +514,31 @@
         let timerInterval = null;
 
         const updateTimerDisplay = () => {
-            chrome.runtime.sendMessage({ action: 'GET_ALARM_TIME' }, (response) => {
-                if (chrome.runtime.lastError || !response || !response.time) {
+            try {
+                if (!chrome.runtime || !chrome.runtime.id) {
+                    if (timerInterval) clearInterval(timerInterval);
                     timerSpan.innerText = "";
-                } else {
-                    const msLeft = response.time - Date.now();
-                    if (msLeft > 0) {
-                        const mins = Math.floor(msLeft / 60000);
-                        const secs = Math.floor((msLeft % 60000) / 1000);
-                        timerSpan.innerText = `Next in: ${mins}m ${secs.toString().padStart(2, '0')}s`;
-                    } else {
-                        timerSpan.innerText = "Syncing...";
-                    }
+                    return;
                 }
-            });
+                chrome.runtime.sendMessage({ action: 'GET_ALARM_TIME' }, (response) => {
+                    if (chrome.runtime.lastError || !response || !response.time) {
+                        timerSpan.innerText = "";
+                    } else {
+                        const msLeft = response.time - Date.now();
+                        if (msLeft > 0) {
+                            const mins = Math.floor(msLeft / 60000);
+                            const secs = Math.floor((msLeft % 60000) / 1000);
+                            timerSpan.innerText = `Next in: ${mins}m ${secs.toString().padStart(2, '0')}s`;
+                        } else {
+                            timerSpan.innerText = "Syncing...";
+                        }
+                    }
+                });
+            } catch (e) {
+                if (timerInterval) clearInterval(timerInterval);
+                timerSpan.innerText = "";
+                console.log("Keka Helper: Extension context invalidated. Polling stopped.");
+            }
         };
 
         if (notifySelect) {
@@ -536,6 +549,10 @@
                     timerSpan.innerText = "";
                 } else if (data.kekaNotifyInterval === 60) {
                     notifySelect.value = "60";
+                    updateTimerDisplay();
+                    timerInterval = setInterval(updateTimerDisplay, 1000);
+                } else if (data.kekaNotifyInterval === 1) {
+                    notifySelect.value = "1";
                     updateTimerDisplay();
                     timerInterval = setInterval(updateTimerDisplay, 1000);
                 } else {
@@ -912,7 +929,7 @@
 
         // Always reset live session state to ensure we don't hold onto old "MISSING" punches
         // if the user has officially punched OUT since the last calculation.
-        let lastActivePunchIn = null;
+        lastActivePunchIn = null;
         window.kekaLastActivePunchIn = null;
 
         // Only run on attendance log page
