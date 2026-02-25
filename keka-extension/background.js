@@ -105,11 +105,10 @@ async function fetchKekaData() {
 
         const json = await response.json();
 
-        let targetGross = 45 * 60; // 45 hours in minutes
         let targetEffective = 40 * 60;
 
-        let totalGross = 0;
-        let todayGross = 0;
+        let totalEffective = 0;
+        let todayEffective = 0;
         let isClockedIn = false;
         let lastInTime = null;
 
@@ -127,42 +126,40 @@ async function fetchKekaData() {
 
                 if (dayDate < monday) continue; // Only process this week
 
-                // Deductions Logic identical to DOM (Leaves / Holidays)
-                // dayType: 1 or 2 implies weekend/holiday
+                // Deductions Logic
                 const isOffDay = dayData.dayType === 1 || dayData.dayType === 2;
 
-                // leaveDayStatuses array handling
                 let isLeave = false;
                 let mentionsHalfDay = false;
                 if (dayData.leaveDayStatuses && dayData.leaveDayStatuses.length > 0) {
                     isLeave = true;
-                    if (dayData.leaveDayStatuses.some(l => l.leaveDayStatus === 1)) { // 1 Usually means Half Day in Keka
+                    if (dayData.leaveDayStatuses.some(l => l.leaveDayStatus === 1)) {
                         mentionsHalfDay = true;
                     }
                 }
 
-                const workedMinutes = Math.floor((dayData.totalGrossHours || 0) * 60);
-                const hasWorkedHours = workedMinutes > 0;
-                const workedFullDay = workedMinutes > 300; // > 5 hours
+                const effectiveMinutes = Math.floor((dayData.totalEffectiveHours || 0) * 60);
+                const hasWorkedHours = effectiveMinutes > 0;
+                // Keka uses 4 hours (240 mins) half day rule for effective
+                const workedFullDay = effectiveMinutes > 240;
 
+                // We only deduct the target on leaves, not plain off days which are naturally 0h
                 if (isLeave) {
-                    // Only deduct if it's a full or half day leave. 
-                    // Normal working days don't deduct the target, they just add to the total.
                     if (mentionsHalfDay || (hasWorkedHours && !workedFullDay)) {
-                        targetGross -= 300; // Deduct 5h for half day
+                        targetEffective -= 240; // Deduct 4h for half day
                     } else if (!isOffDay) {
-                        targetGross -= 540; // Deduct 9h for full leave
+                        targetEffective -= 480; // Deduct 8h for full leave
                     }
                 } else if (mentionsHalfDay && !workedFullDay) {
-                    targetGross -= 300; // Deduct 5h for half day without explicit leave tag
+                    targetEffective -= 240;
                 }
 
                 // Sum up hours
-                totalGross += workedMinutes;
+                totalEffective += effectiveMinutes;
 
                 // Handle "Today" logic specifically
                 if (dayDate.getTime() === todayFn.getTime()) {
-                    todayGross = workedMinutes;
+                    todayEffective = effectiveMinutes;
 
                     // Check if actively clocked in by looking at pairs
                     if (dayData.validInOutPairs && dayData.validInOutPairs.length > 0) {
@@ -177,40 +174,35 @@ async function fetchKekaData() {
             }
         }
 
-        if (targetGross < 0) targetGross = 0;
+        if (targetEffective < 0) targetEffective = 0;
 
         // Calculate the Final Target
         // 1. Calculate how many hours we still need to hit the target.
-        const weeklyRemainGross = targetGross - totalGross;
+        const weeklyRemainEffective = targetEffective - totalEffective;
 
         let message = "";
         let logoffDateObj = null;
 
-        if (weeklyRemainGross <= 0) {
-            message = "GOAL MET! 🎉 (V2 API)";
+        if (weeklyRemainEffective <= 0) {
+            message = "GOAL MET! 🎉 (V2 API · 40h)";
         } else {
             // Target not met yet. Evaluate if actively clocking.
             if (isClockedIn && lastInTime) {
-                // If clocked in, we need to work `weeklyRemainGross` MORE minutes from the moment we clocked in today.
-                // Wait, no. `totalGross` ALREADY includes what Keka synced up to the point of `lastInTime`? 
-                // Actually, keka's `totalGrossHours` represents the sum of ALL COMPLETED PAIRS for today, 
+                // If clocked in, we need to work `weeklyRemainEffective` MORE minutes.
+                // Keka's `totalEffectiveHours` represents the sum of ALL COMPLETED PAIRS for today, 
                 // plus the duration of the current open pair IF their backend syncs it.
-                // Normally Keka API is static until a punch out. 
-                // Let's assume `totalGrossHours` only reflects CLOSED pairs.
-                // If so: Logoff Time = Last In Time + (weeklyRemainGross minutes)
+                // Assuming it only reflects CLOSED pairs:
+                // Logoff Time = Last In Time + (weeklyRemainEffective minutes)
 
-                logoffDateObj = new Date(lastInTime.getTime() + (weeklyRemainGross * 60000));
+                logoffDateObj = new Date(lastInTime.getTime() + (weeklyRemainEffective * 60000));
 
-                // If the Logoff time is in the past, Keka's API just hasn't updated the closed pair yet, but goal is technically met.
                 if (logoffDateObj < now) {
-                    message = "GOAL MET! 🎉 (V2 API)";
-                    // Though mathematically logoffDateObj is in the past.
+                    message = "GOAL MET! 🎉 (V2 API · 40h)";
                 } else {
-                    message = `Logoff at ${formatLogoffTime(logoffDateObj)} (V2 API)`;
+                    message = `Logoff at ${formatLogoffTime(logoffDateObj)} (V2 API · 40h)`;
                 }
             } else {
-                // Not clocked in.
-                message = `You are clocked out. Need ${Math.floor(weeklyRemainGross / 60)}h ${Math.floor(weeklyRemainGross % 60)}m more. (V2 API)`;
+                message = `You are clocked out. Need ${Math.floor(weeklyRemainEffective / 60)}h ${Math.floor(weeklyRemainEffective % 60)}m more. (V2 API)`;
             }
         }
 
