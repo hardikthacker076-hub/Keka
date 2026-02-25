@@ -39,32 +39,27 @@ chrome.storage.onChanged.addListener((changes, namespace) => {
     }
 });
 
-// Variable to hold the latest known status
-let latestStatus = null;
-let lastUpdateTime = 0;
-
 // Listen for the alarm to trigger
 chrome.alarms.onAlarm.addListener((alarm) => {
     if (alarm.name === 'kekaNotifier') {
-        chrome.storage.local.get(['kekaNotifyEnabled'], (data) => {
-            if (data.kekaNotifyEnabled && latestStatus) {
+        chrome.storage.local.get(['kekaNotifyEnabled', 'kekaLatestStatus', 'kekaLastUpdateTime'], (data) => {
+            if (data.kekaNotifyEnabled && data.kekaLatestStatus) {
                 // Check if data is fresh. The content script sends updates every 60s.
                 // If the data is older than 5 minutes, it means the Keka tab is closed.
-                // We should NOT send a notification if the tab is closed, to avoid stale/yesterday's data.
-                const timeSinceLastUpdate = Date.now() - lastUpdateTime;
+                const timeSinceLastUpdate = Date.now() - (data.kekaLastUpdateTime || 0);
                 if (timeSinceLastUpdate > 5 * 60 * 1000) {
                     console.log("Keka Helper: Data is stale (Keka tab closed). Suppressing notification.");
-                    return;
+                    return; // Suppress notification
                 }
 
                 // Determine the context
                 let message = "";
-                if (latestStatus.isGoalMet) {
+                if (data.kekaLatestStatus.isGoalMet) {
                     message = "GOAL MET! 🎉";
-                } else if (latestStatus.isWeekOver) {
+                } else if (data.kekaLatestStatus.isWeekOver) {
                     message = "Week Over! 😭 (Target Not Met)";
                 } else {
-                    message = `Logoff at ${latestStatus.effectiveLogoffStr}`;
+                    message = `Logoff at ${data.kekaLatestStatus.effectiveLogoffStr}`;
                 }
 
                 chrome.notifications.create({
@@ -83,8 +78,10 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 // Listen for messages from content.js with the latest calculations
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (request.action === 'UPDATE_KEKA_STATUS') {
-        latestStatus = request.data;
-        lastUpdateTime = Date.now();
+        chrome.storage.local.set({
+            kekaLatestStatus: request.data,
+            kekaLastUpdateTime: Date.now()
+        });
     } else if (request.action === 'GET_ALARM_TIME') {
         chrome.alarms.get('kekaNotifier', (alarm) => {
             if (alarm) {
