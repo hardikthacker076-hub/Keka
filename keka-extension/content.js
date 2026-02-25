@@ -836,6 +836,11 @@
     async function calculate(force = false) {
         if (hasCalculated && !force) return;
 
+        // Always reset live session state to ensure we don't hold onto old "MISSING" punches
+        // if the user has officially punched OUT since the last calculation.
+        lastActivePunchIn = null;
+        window.kekaLastActivePunchIn = null;
+
         // Only run on attendance log page
         if (!location.href.includes('/me/attendance/logs')) {
             console.log("Keka Helper: Not on attendance page, skipping.");
@@ -1094,8 +1099,16 @@
             leftEffective = Math.max(0, todayEffTarget - todayEffectiveLive);
 
             // OUT TIME: NOW + remaining (updates dynamically — breaks push it later)
+            console.log("Keka Helper Calc OUT Time:");
+            console.log(` - NOW: ${formatTime(now)}`);
+            console.log(` - leftGross (min): ${leftGross}`);
+            console.log(` - leftEffective (min): ${leftEffective}`);
+
             const outTimeGross = new Date(now.getTime() + leftGross * 60000);
             const outTimeEffective = new Date(now.getTime() + leftEffective * 60000);
+
+            console.log(` - outTimeGross: ${formatTime(outTimeGross)}`);
+            console.log(` - outTimeEffective: ${formatTime(outTimeEffective)}`);
 
             logoffGrossStr = "Wait...";
             if (todayGrossTarget === 0 || todayGrossLive >= todayGrossTarget) {
@@ -1310,6 +1323,14 @@
         observer.observe(document.body, { childList: true, subtree: true });
 
         calculate();
+
+        // Auto-refresh every 60 seconds to keep live "Left" and "OUT" times accurate
+        setInterval(() => {
+            if (location.href.includes('/me/attendance/logs')) {
+                console.log("Keka Helper: Auto-refreshing calculation...");
+                calculate(true);
+            }
+        }, 60000);
     }
 
     try {
