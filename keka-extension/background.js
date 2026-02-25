@@ -105,6 +105,11 @@ async function fetchKekaData() {
 
         const json = await response.json();
 
+        // --- DEBUG API DUMP ---
+        chrome.storage.local.set({ kekaDebugApiDump: json });
+        console.log("Keka Helper (V2): Dumped raw API payload to storage.");
+        // ----------------------
+
         let targetEffective = 40 * 60;
 
         let totalEffective = 0;
