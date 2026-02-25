@@ -881,206 +881,70 @@
         const todayFn = new Date();
         todayFn.setHours(0, 0, 0, 0);
 
-        // Smart Weekly Cache:
-        // Previous days (Mon → yesterday) are finalized — cache them per week.
-        // Today's row is always read fresh from the DOM.
-        const mondayKey = `keka_week_${monday.getFullYear()}_${monday.getMonth()}_${monday.getDate()}`;
-        let prevCache = null;
-        if (!force) {
-            try {
-                const raw = localStorage.getItem(mondayKey);
-                if (raw) prevCache = JSON.parse(raw);
-            } catch (e) { prevCache = null; }
-        } else {
-            // Force refresh → clear weekly cache and reset animation flags
-            localStorage.removeItem(mondayKey);
-            window.kekaEmojiShown = false;
-            window.kekaCheerPlayed = false;
-            window.kekaSadPlayed = false;
-        }
+        // process all rows fresh from the DOM to ensure 100% accuracy
+        let deductedGross = 0;
+        let deductedEffective = 0;
 
-        if (prevCache) {
-            // Restore previous day totals from cache
-            totalGross = prevCache.totalGross;
-            totalEffective = prevCache.totalEffective;
-            targetGross -= prevCache.deductedGross;
-            targetEffective -= prevCache.deductedEffective;
-            console.log("Keka Helper: Using weekly cache for previous days.");
+        for (let row of rows) {
+            const spans = Array.from(row.querySelectorAll('span'));
+            // Date Filter
+            const dateSpan = spans.find(s => /^[A-Z][a-z]{2}, \d{2} [A-Z][a-z]{2}$/.test(s.innerText.trim()));
+            if (!dateSpan) continue;
 
-            // Find today's row directly from DOM (todayRow is null since we skipped the full loop)
-            for (let row of rows) {
-                const spans = Array.from(row.querySelectorAll('span'));
-                const dateSpan = spans.find(s => /^[A-Z][a-z]{2}, \d{2} [A-Z][a-z]{2}$/.test(s.innerText.trim()));
-                if (!dateSpan) continue;
+            const dateStr = dateSpan.innerText.trim();
+            const rowDate = new Date(`${dateStr} ${now.getFullYear()}`);
+            rowDate.setHours(0, 0, 0, 0);
 
-                const rowDate = new Date(`${dateSpan.innerText.trim()} ${now.getFullYear()}`);
-                rowDate.setHours(0, 0, 0, 0);
+            if (rowDate < monday) continue;
 
-                if (rowDate.getTime() === todayFn.getTime()) {
-                    todayRow = row;
+            // Deductions
+            const txt = row.innerText.toUpperCase();
+            console.log("Keka Helper Process Row:", { date: dateStr, text: txt });
 
-                    // Also apply today's deductions to target
-                    const txt = row.innerText.toUpperCase();
-                    const offKeywords = ["HOLIDAY", "HLDY", "WEEKLY OFF", "WO", "FLOATING"];
-                    const leaveKeywords = ["LEAVE", "LWP", "UA", "AB", "CASUAL", "SICK",
-                        "PRIVILEGE", "EARNED", "COMP OFF", "COMP-OFF",
-                        "MATERNITY", "PATERNITY", "BEREAVEMENT", "MARRIAGE", "UNPAID"];
-                    const isOffDay = offKeywords.some(kw => txt.includes(kw));
-                    const isLeave = leaveKeywords.some(kw => txt.includes(kw));
-                    const mentionsHalfDay = txt.includes("HALF DAY");
-                    const hoursMatch = txt.match(/(\d+)h\s+(\d+)m/);
-                    let todayWorkedMin = 0;
-                    if (hoursMatch) todayWorkedMin = (parseInt(hoursMatch[1]) * 60) + parseInt(hoursMatch[2]);
-                    const hasWorkedHours = todayWorkedMin > 0;
-                    const workedFullDay = todayWorkedMin > 300;
+            const offKeywords = ["HOLIDAY", "HLDY", "WEEKLY OFF", "WO", "FLOATING"];
+            const isOffDay = offKeywords.some(kw => txt.includes(kw));
 
-                    if (isOffDay) {
-                        targetGross -= 540; targetEffective -= 480;
-                    } else if (isLeave) {
-                        if (mentionsHalfDay || (hasWorkedHours && !workedFullDay)) {
-                            targetGross -= 300; targetEffective -= 240;
-                        } else {
-                            targetGross -= 540; targetEffective -= 480;
-                        }
-                    } else if (mentionsHalfDay && !workedFullDay) {
-                        targetGross -= 300; targetEffective -= 240;
-                    }
+            const leaveKeywords = [
+                "LEAVE", "LWP", "UA", "AB", "CASUAL", "SICK",
+                "PRIVILEGE", "EARNED", "COMP OFF", "COMP-OFF",
+                "MATERNITY", "PATERNITY", "BEREAVEMENT", "MARRIAGE", "UNPAID"
+            ];
+            const isLeave = leaveKeywords.some(kw => txt.includes(kw));
+            const mentionsHalfDay = txt.includes("HALF DAY");
 
-                    // Parse today's hours into today-only vars
-                    const hourSpans = spans.filter(s => /(\d+)h\s+(\d+)m/.test(s.innerText));
-                    if (hourSpans.length > 0) {
-                        const grossSpan = hourSpans[hourSpans.length - 1];
-                        todayGross = parseDuration(grossSpan.innerText);
-                        if (hourSpans.length >= 2) {
-                            todayEffective = parseDuration(hourSpans[0].innerText);
-                        } else {
-                            todayEffective = parseDuration(grossSpan.innerText);
-                        }
-                    }
-                    totalGross += todayGross;
-                    totalEffective += todayEffective;
-                    break;
-                }
+            const hoursMatch = txt.match(/(\d+)h\s+(\d+)m/);
+            let workedMinutes = 0;
+            if (hoursMatch) {
+                workedMinutes = (parseInt(hoursMatch[1]) * 60) + parseInt(hoursMatch[2]);
             }
-        } else {
-            // Full loop — calculate all rows and cache previous days at end
-            let deductedGross = 0;
-            let deductedEffective = 0;
+            const hasWorkedHours = workedMinutes > 0;
+            const workedFullDay = workedMinutes > 300;
 
-            for (let row of rows) {
-                const spans = Array.from(row.querySelectorAll('span'));
-                // Date Filter
-                const dateSpan = spans.find(s => /^[A-Z][a-z]{2}, \d{2} [A-Z][a-z]{2}$/.test(s.innerText.trim()));
-                if (!dateSpan) continue;
+            let deductGross = 0;
+            let deductEffective = 0;
 
-                const dateStr = dateSpan.innerText.trim();
-                const rowDate = new Date(`${dateStr} ${now.getFullYear()}`);
-                rowDate.setHours(0, 0, 0, 0);
-
-                if (rowDate < monday) continue;
-
-                // Deductions
-                // ---------------------------------------------------------
-                // ROBUST DEDUCTION LOGIC v2
-                // ---------------------------------------------------------
-                const txt = row.innerText.toUpperCase();
-                console.log("Keka Helper Process Row:", { date: dateStr, text: txt });
-
-                // 1. Check for Off Days (Holiday, Weekly Off) - Zero Target
-                const offKeywords = ["HOLIDAY", "HLDY", "WEEKLY OFF", "WO", "FLOATING"];
-                const isOffDay = offKeywords.some(kw => txt.includes(kw));
-
-                // 2. Check for Leaves
-                const leaveKeywords = [
-                    "LEAVE", "LWP", "UA", "AB", "CASUAL", "SICK",
-                    "PRIVILEGE", "EARNED", "COMP OFF", "COMP-OFF",
-                    "MATERNITY", "PATERNITY", "BEREAVEMENT", "MARRIAGE", "UNPAID"
-                ];
-                const isLeave = leaveKeywords.some(kw => txt.includes(kw));
-
-                // Check for explicit "Half Day" mention
-                const mentionsHalfDay = txt.includes("HALF DAY");
-
-                // Allow regex to find hours even if text is messy
-                const hoursMatch = txt.match(/(\d+)h\s+(\d+)m/);
-                let workedMinutes = 0;
-                if (hoursMatch) {
-                    workedMinutes = (parseInt(hoursMatch[1]) * 60) + parseInt(hoursMatch[2]);
+            if (isOffDay) {
+                deductGross = 540;
+                deductEffective = 480;
+            } else if (isLeave) {
+                if (mentionsHalfDay || (hasWorkedHours && !workedFullDay)) {
+                    deductGross = 300;
+                    deductEffective = 240;
+                } else {
+                    deductGross = 540;
+                    deductEffective = 480;
                 }
-                const hasWorkedHours = workedMinutes > 0;
-                const workedFullDay = workedMinutes > 300; // > 5 hours implies working day
-
-                let deductGross = 0;
-                let deductEffective = 0;
-
-                if (isOffDay) {
-                    // WO/Holiday -> Always 9h deduction (Target becomes 0)
-                    console.log(`Keka Helper: Detected Off Day (WO/Holiday) for ${dateStr}`);
-                    deductGross = 540; // 9h
-                    deductEffective = 480; // 8h
-                } else if (isLeave) {
-                    // It IS a leave day. Now determine if Half or Full.
-                    if (mentionsHalfDay || (hasWorkedHours && !workedFullDay)) {
-                        // Half Day Leave -> Deduct 5h
-                        console.log(`Keka Helper: Detected Half Day Leave for ${dateStr}`);
-                        deductGross = 300; // 5h
-                        deductEffective = 240; // 4h
-                    } else {
-                        // Full Day Leave -> Deduct 9h
-                        console.log(`Keka Helper: Detected Full Day Leave for ${dateStr}`);
-                        deductGross = 540; // 9h
-                        deductEffective = 480; // 8h
-                    }
-                } else if (mentionsHalfDay) {
-                    // "HALF DAY" mentioned but NO "LEAVE" word (e.g. "WFH - Half Day")
-                    if (!workedFullDay) {
-                        console.log(`Keka Helper: Ambiguous Half Day (low hours) -> Deducting for ${dateStr}`);
-                        deductGross = 300; // 5h
-                        deductEffective = 240; // 4h
-                    } else {
-                        console.log(`Keka Helper: Ambiguous Half Day (high hours) -> Treated as Full Work Day for ${dateStr}`);
-                    }
-                }
-
-                targetGross -= deductGross;
-                targetEffective -= deductEffective;
-                deductedGross += deductGross;
-                deductedEffective += deductEffective;
-
-                if (rowDate.getTime() === todayFn.getTime()) {
-                    todayRow = row;
-                    continue;
-                }
-
-                // GET HOURS (previous days only)
-                const hourSpans = spans.filter(s => /(\d+)h\s+(\d+)m/.test(s.innerText));
-                if (hourSpans.length > 0) {
-                    const grossSpan = hourSpans[hourSpans.length - 1];
-                    totalGross += parseDuration(grossSpan.innerText);
-
-                    if (hourSpans.length >= 2) {
-                        const effSpan = hourSpans[0];
-                        totalEffective += parseDuration(effSpan.innerText);
-                    } else {
-                        totalEffective += parseDuration(grossSpan.innerText);
-                    }
-                }
+            } else if (mentionsHalfDay && !workedFullDay) {
+                deductGross = 300;
+                deductEffective = 240;
             }
 
-            // Cache previous days' totals for future page loads
-            try {
-                localStorage.setItem(mondayKey, JSON.stringify({
-                    totalGross,
-                    totalEffective,
-                    deductedGross,
-                    deductedEffective
-                }));
-                console.log("Keka Helper: Weekly cache saved.");
-            } catch (e) { console.warn("Keka Helper: Could not save weekly cache", e); }
+            targetGross -= deductGross;
+            targetEffective -= deductEffective;
 
-            // Now parse today's row — stored separately for OUT time calculation
-            if (todayRow) {
-                const spans = Array.from(todayRow.querySelectorAll('span'));
+            if (rowDate.getTime() === todayFn.getTime()) {
+                todayRow = row;
+                // update today vars immediately for OUT time
                 const hourSpans = spans.filter(s => /(\d+)h\s+(\d+)m/.test(s.innerText));
                 if (hourSpans.length > 0) {
                     const grossSpan = hourSpans[hourSpans.length - 1];
@@ -1091,10 +955,25 @@
                         todayEffective = parseDuration(grossSpan.innerText);
                     }
                 }
+                totalGross += todayGross;
+                totalEffective += todayEffective;
+                continue;
             }
-            totalGross += todayGross;
-            totalEffective += todayEffective;
-        } // end else (full loop)
+
+            // previous days only
+            const hourSpans = spans.filter(s => /(\d+)h\s+(\d+)m/.test(s.innerText));
+            if (hourSpans.length > 0) {
+                const grossSpan = hourSpans[hourSpans.length - 1];
+                totalGross += parseDuration(grossSpan.innerText);
+
+                if (hourSpans.length >= 2) {
+                    const effSpan = hourSpans[0];
+                    totalEffective += parseDuration(effSpan.innerText);
+                } else {
+                    totalEffective += parseDuration(grossSpan.innerText);
+                }
+            }
+        }
 
         if (targetGross < 0) targetGross = 0;
         if (targetEffective < 0) targetEffective = 0;
