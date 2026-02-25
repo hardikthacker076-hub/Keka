@@ -62,13 +62,12 @@ chrome.alarms.onAlarm.addListener((alarm) => {
                     message = `Logoff at ${data.kekaLatestStatus.effectiveLogoffStr}`;
                 }
 
-                chrome.notifications.create({
+                const notifId = 'keka-notify-' + Date.now();
+                chrome.notifications.create(notifId, {
                     type: 'basic',
-                    iconUrl: 'icon.png', // Fallback if no specific icon exists
+                    iconUrl: 'icon.png',
                     title: 'Keka Target',
-                    message: message,
-                    priority: 2,
-                    requireInteraction: false
+                    message: message
                 }, (notificationId) => {
                     if (chrome.runtime.lastError) {
                         console.error("Keka Helper: Failed to create notification:", chrome.runtime.lastError);
