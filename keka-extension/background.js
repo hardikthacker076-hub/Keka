@@ -64,10 +64,17 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 
                 chrome.notifications.create({
                     type: 'basic',
+                    iconUrl: 'icon.png', // Fallback if no specific icon exists
                     title: 'Keka Target',
                     message: message,
                     priority: 2,
                     requireInteraction: false
+                }, (notificationId) => {
+                    if (chrome.runtime.lastError) {
+                        console.error("Keka Helper: Failed to create notification:", chrome.runtime.lastError);
+                    } else {
+                        console.log("Keka Helper: Notification shown successfully! ID:", notificationId);
+                    }
                 });
             }
         });
