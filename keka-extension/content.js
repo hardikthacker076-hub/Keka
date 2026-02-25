@@ -499,7 +499,7 @@
                         <option value="60" style="background: #1e2532;">Every 60m</option>
                     </select>
                 </div>
-                v${(() => { try { return chrome.runtime.getManifest().version; } catch (e) { return "?"; } })()} | Made to hit 45h accurately
+                v1.63 | Made to hit 45h accurately
             </div>
             </div><!-- end keka-panel-body -->
         `;
