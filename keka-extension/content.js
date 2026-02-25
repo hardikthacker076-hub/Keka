@@ -1167,6 +1167,15 @@
             hideDropStyle.remove();
         }
 
+        // Initialize fallback values
+        let logoffGrossStr = "--:--";
+        let logoffEffectiveStr = "--:--";
+        let leftGross = 0;
+        let leftEffective = 0;
+        let catchupGross = 0;
+        let catchupEffective = 0;
+        let avgNote = "";
+
         if (loginTime) {
             const todayIndex = now.getDay();
             let daysPassed = 0;
@@ -1184,8 +1193,8 @@
             const expectedEffPrev = daysPassed * 480;  // 8h per previous day
 
             // Positive = behind (need to catch up), Negative = ahead (can leave early)
-            const catchupGross = expectedGrossPrev - prevDaysGross;
-            const catchupEffective = expectedEffPrev - prevDaysEffective;
+            catchupGross = expectedGrossPrev - prevDaysGross;
+            catchupEffective = expectedEffPrev - prevDaysEffective;
 
             // Today's personal target (accounts for catchup from previous days)
             const todayGrossTarget = Math.max(0, 540 + catchupGross);
@@ -1202,21 +1211,21 @@
             const todayEffectiveLive = todayEffective + liveMinutes;
 
             // LEFT: how many minutes remain (using live-adjusted worked hours)
-            const leftGross = Math.max(0, todayGrossTarget - todayGrossLive);
-            const leftEffective = Math.max(0, todayEffTarget - todayEffectiveLive);
+            leftGross = Math.max(0, todayGrossTarget - todayGrossLive);
+            leftEffective = Math.max(0, todayEffTarget - todayEffectiveLive);
 
             // OUT TIME: NOW + remaining (updates dynamically — breaks push it later)
             const outTimeGross = new Date(now.getTime() + leftGross * 60000);
             const outTimeEffective = new Date(now.getTime() + leftEffective * 60000);
 
-            let logoffGrossStr = "Wait...";
+            logoffGrossStr = "Wait...";
             if (todayGrossTarget === 0 || todayGrossLive >= todayGrossTarget) {
                 logoffGrossStr = "GOAL MET! 🎉";
             } else {
                 logoffGrossStr = formatTime(outTimeGross);
             }
 
-            let logoffEffectiveStr = "Wait...";
+            logoffEffectiveStr = "Wait...";
             if (todayEffTarget === 0 || todayEffectiveLive >= todayEffTarget) {
                 logoffEffectiveStr = "GOAL MET! 🎉";
                 if (!window.kekaCheerPlayed) {
@@ -1234,24 +1243,11 @@
             }
 
             // Note: show if catching up or ahead vs weekly target
-            let avgNote = "";
             if (catchupGross > 0 || catchupEffective > 0) {
                 avgNote = `<span style="font-size:10px; opacity:0.7; font-weight:400; margin-left:4px;">(Catching up)</span>`;
             } else if (catchupGross < -60 || catchupEffective < -60) {
                 avgNote = `<span style="font-size:10px; opacity:0.7; font-weight:400; margin-left:4px;">(Ahead 🎯)</span>`;
             }
-
-            const dataToCache = {
-                grossLogoff: logoffGrossStr,
-                effectiveLogoff: logoffEffectiveStr,
-                grossLeft: toHm(leftGross),
-                effectiveLeft: toHm(leftEffective),
-                grossWorked: toHm(todayGrossLive),
-                effectiveWorked: toHm(todayEffectiveLive),
-                avgNote: avgNote
-            };
-
-
 
             // Visual Feedback / Gamification - based on TODAY's target
             // Confetti: today's effective goal is met
@@ -1270,20 +1266,38 @@
                     triggerSadEmoji();
                 }
             }
-
-            createBanner(
-                dataToCache.grossLogoff,
-                dataToCache.effectiveLogoff,
-                dataToCache.grossLeft,
-                dataToCache.effectiveLeft,
-                dataToCache.grossWorked,
-                dataToCache.effectiveWorked,
-                dataToCache.avgNote
-            );
-
         } else {
-            console.log("Keka Helper: Could not find login time, will retry if DOM updates...");
+            console.log("Keka Helper: Login time not found (Pending approval?), showing limited banner.");
+            logoffGrossStr = "--:--";
+            logoffEffectiveStr = "--:--";
+            avgNote = `<span style="font-size:10px; opacity:0.7; font-weight:400; margin-left:4px;">(Pending?)</span>`;
         }
+
+        // Always calculate "Worked" totals to show in the panel even if loginTime is missing
+        let liveMin = 0;
+        if (lastActivePunchIn) {
+            liveMin = Math.max(0, Math.floor((now.getTime() - lastActivePunchIn.getTime()) / 60000));
+        }
+
+        const dataToCache = {
+            grossLogoff: logoffGrossStr,
+            effectiveLogoff: logoffEffectiveStr,
+            grossLeft: toHm(leftGross),
+            effectiveLeft: toHm(leftEffective),
+            grossWorked: toHm(todayGross + liveMin),
+            effectiveWorked: toHm(todayEffective + liveMin),
+            avgNote: avgNote
+        };
+
+        createBanner(
+            dataToCache.grossLogoff,
+            dataToCache.effectiveLogoff,
+            dataToCache.grossLeft,
+            dataToCache.effectiveLeft,
+            dataToCache.grossWorked,
+            dataToCache.effectiveWorked,
+            dataToCache.avgNote
+        );
     }
 
     // --- VISUAL EFFECTS ---
