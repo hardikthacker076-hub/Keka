@@ -486,6 +486,9 @@
             <button id="keka-refresh-panel" class="keka-btn keka-btn-secondary">
                 ↻ Refresh Today's Data
             </button>
+            <button id="keka-test-api-btn" class="keka-btn keka-btn-primary" style="margin-top: 8px; background: rgba(52, 152, 219, 0.2); border-color: rgba(52, 152, 219, 0.4); color: #3498db;">
+                🚀 Test V2 API Notification
+            </button>
             <div style="font-size: 11px; color: rgba(255,255,255,0.4); text-align: center; margin-top: 15px;">
                 <div style="display:flex; justify-content:space-between; align-items:center; background: rgba(0,0,0,0.2); padding: 8px 12px; border-radius: 6px; margin-bottom: 8px;">
                     <span style="font-weight: 500; color: rgba(255,255,255,0.7);">Desktop Notifications</span>
@@ -499,7 +502,7 @@
                         <option value="60" style="background: #1e2532;">Every 60m</option>
                     </select>
                 </div>
-                v1.63 | Made to hit 45h accurately
+                v2.00 | Direct API Integration
             </div>
             </div><!-- end keka-panel-body -->
         `;
@@ -580,6 +583,20 @@
                     }, 500);
                 }
             });
+        }
+
+        const testApiBtn = document.getElementById('keka-test-api-btn');
+        if (testApiBtn) {
+            testApiBtn.onclick = (e) => {
+                e.preventDefault();
+                const originalText = testApiBtn.innerText;
+                testApiBtn.innerText = "⏳ Fetching...";
+                chrome.runtime.sendMessage({ action: 'TEST_API_FETCH' });
+
+                setTimeout(() => {
+                    testApiBtn.innerText = originalText;
+                }, 2000);
+            };
         }
         // ----------------------------------------
 
