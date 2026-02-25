@@ -1,3 +1,26 @@
+let kekaAuthToken = null;
+
+chrome.storage.local.get(['kekaAuthToken'], (result) => {
+    if (result.kekaAuthToken) kekaAuthToken = result.kekaAuthToken;
+});
+
+chrome.webRequest.onSendHeaders.addListener(
+    function (details) {
+        for (let header of details.requestHeaders) {
+            if (header.name.toLowerCase() === 'authorization') {
+                if (header.value !== kekaAuthToken) {
+                    kekaAuthToken = header.value;
+                    chrome.storage.local.set({ kekaAuthToken: header.value });
+                    console.log("Keka Helper: Intercepted new Auth Token!");
+                }
+                break;
+            }
+        }
+    },
+    { urls: ["https://*.keka.com/*"] },
+    ["requestHeaders"]
+);
+
 chrome.runtime.onInstalled.addListener(() => {
     // Default to 30 minutes if not set
     chrome.storage.local.get(['kekaNotifyInterval', 'kekaNotifyEnabled'], (data) => {
