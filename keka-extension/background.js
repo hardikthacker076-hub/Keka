@@ -65,7 +65,6 @@ chrome.alarms.onAlarm.addListener((alarm) => {
                 const notifId = 'keka-notify-' + Date.now();
                 chrome.notifications.create(notifId, {
                     type: 'basic',
-                    iconUrl: chrome.runtime.getURL('icon.png'),
                     title: 'Keka Target',
                     message: message
                 }, (notificationId) => {
