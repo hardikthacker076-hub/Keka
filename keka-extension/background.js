@@ -178,7 +178,11 @@ async function fetchKekaData() {
                     // Check if actively clocked in by looking at pairs
                     if (dayData.validInOutPairs && dayData.validInOutPairs.length > 0) {
                         const lastPair = dayData.validInOutPairs[dayData.validInOutPairs.length - 1];
-                        if (lastPair.inTime && !lastPair.outTime) {
+
+                        // Keka API might return null OR a dummy .NET Date "0001-01-01T00:00:00" for an active session
+                        const isMissingOut = !lastPair.outTime || lastPair.outTime.includes('0001');
+
+                        if (lastPair.inTime && isMissingOut) {
                             isClockedIn = true;
                             // Ensure Keka's inTime date format parses cleanly
                             lastInTime = new Date(lastPair.inTime);
