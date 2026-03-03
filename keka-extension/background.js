@@ -175,17 +175,18 @@ async function fetchKekaData() {
                 if (dayDate.getTime() === todayFn.getTime()) {
                     todayEffective = effectiveMinutes;
 
-                    // Check if actively clocked in by looking at pairs
-                    if (dayData.validInOutPairs && dayData.validInOutPairs.length > 0) {
-                        const lastPair = dayData.validInOutPairs[dayData.validInOutPairs.length - 1];
+                    // Look at Keka's explicit punch metrics rather than validInOutPairs 
+                    // (since the array only contains completely closed pairs)
+                    if (dayData.lastLogOfTheDay) {
+                        const lastLog = new Date(dayData.lastLogOfTheDay);
+                        const lastOut = dayData.lastOutOfTheDay ? new Date(dayData.lastOutOfTheDay) : null;
 
-                        // Keka API might return null OR a dummy .NET Date "0001-01-01T00:00:00" for an active session
-                        const isMissingOut = !lastPair.outTime || lastPair.outTime.includes('0001');
+                        // If there is no out punch, or the last out punch is older than the last log, we are clocked IN
+                        const isMissingOutFallback = !lastOut || isNaN(lastOut.getTime()) || (lastLog.getTime() > lastOut.getTime()) || dayData.lastOutOfTheDay.includes("0001");
 
-                        if (lastPair.inTime && isMissingOut) {
+                        if (isMissingOutFallback) {
                             isClockedIn = true;
-                            // Ensure Keka's inTime date format parses cleanly
-                            lastInTime = new Date(lastPair.inTime);
+                            lastInTime = lastLog;
                         }
                     }
                 }

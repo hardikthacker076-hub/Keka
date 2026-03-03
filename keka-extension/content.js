@@ -502,7 +502,7 @@
                         <option value="60" style="background: #1e2532;">Every 60m</option>
                     </select>
                 </div>
-                v2.05 | Direct API Sync (40h Effective Target)
+                v2.06 | Direct API Sync (40h Effective Target)
             </div>
             </div><!-- end keka-panel-body -->
         `;
