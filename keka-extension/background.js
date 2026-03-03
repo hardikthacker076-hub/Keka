@@ -136,11 +136,20 @@ async function fetchKekaData() {
 
                 let isLeave = false;
                 let mentionsHalfDay = false;
+
+                // 1. Check leaveDayStatuses
                 if (dayData.leaveDayStatuses && dayData.leaveDayStatuses.length > 0) {
-                    isLeave = true;
-                    if (dayData.leaveDayStatuses.some(l => l.leaveDayStatus === 1)) {
-                        mentionsHalfDay = true;
+                    if (dayData.leaveDayStatuses.every(status => status === 1)) {
+                        isLeave = true; // 1 represents a full day leave approval
+                    } else {
+                        // If it's something else, it might be a half day, we'll check duration
+                        isLeave = true;
                     }
+                }
+
+                // 2. Fallback check for leaveDetails array (Comp Offs / Casual Leaves)
+                if (dayData.leaveDetails && dayData.leaveDetails.length > 0) {
+                    isLeave = true;
                 }
 
                 const effectiveMinutes = Math.floor((dayData.totalEffectiveHours || 0) * 60);
@@ -181,25 +190,37 @@ async function fetchKekaData() {
 
         if (targetEffective < 0) targetEffective = 0;
 
-        // Calculate the Final Target
-        // 1. Calculate how many hours we still need to hit the target.
-        const weeklyRemainEffective = targetEffective - totalEffective;
+        // Calculate the Final Target using exact V1 UI Parity Math
+        let todayIndex = now.getDay();
+        let daysPassed = 0;
+        if (todayIndex >= 1 && todayIndex <= 5) {
+            daysPassed = todayIndex - 1; // Mon=0, Tue=1, etc.
+        } else if (todayIndex === 6) {
+            daysPassed = 5;
+        }
+
+        const prevDaysEffective = totalEffective - todayEffective;
+        const expectedEffPrev = daysPassed * 480; // 8h per previous day
+        const catchupEffective = expectedEffPrev - prevDaysEffective;
+
+        // Today's personal target
+        const todayEffTarget = Math.max(0, 480 + catchupEffective);
+
+        // Left for today (excluding live session, since Keka's UI left includes live session but the API payload only has closed pairs)
+        // Actually, if we use lastInTime, the API gives us `todayEffective` WITHOUT the current open pair.
+        // So they need to work `todayEffTarget - todayEffective` minutes *from the start of the last punch in*.
+        const leftEffective = Math.max(0, todayEffTarget - todayEffective);
 
         let message = "";
         let logoffDateObj = null;
 
-        if (weeklyRemainEffective <= 0) {
+        if (totalEffective >= targetEffective || leftEffective <= 0) {
             message = "GOAL MET! 🎉 (V2 API · 40h)";
         } else {
             // Target not met yet. Evaluate if actively clocking.
             if (isClockedIn && lastInTime) {
-                // If clocked in, we need to work `weeklyRemainEffective` MORE minutes.
-                // Keka's `totalEffectiveHours` represents the sum of ALL COMPLETED PAIRS for today, 
-                // plus the duration of the current open pair IF their backend syncs it.
-                // Assuming it only reflects CLOSED pairs:
-                // Logoff Time = Last In Time + (weeklyRemainEffective minutes)
-
-                logoffDateObj = new Date(lastInTime.getTime() + (weeklyRemainEffective * 60000));
+                // Determine Logoff Time from the exact Start Time of the current live session
+                logoffDateObj = new Date(lastInTime.getTime() + (leftEffective * 60000));
 
                 if (logoffDateObj < now) {
                     message = "GOAL MET! 🎉 (V2 API · 40h)";
@@ -207,7 +228,8 @@ async function fetchKekaData() {
                     message = `Logoff at ${formatLogoffTime(logoffDateObj)} (V2 API · 40h)`;
                 }
             } else {
-                message = `You are clocked out. Need ${Math.floor(weeklyRemainEffective / 60)}h ${Math.floor(weeklyRemainEffective % 60)}m more. (V2 API)`;
+                // If clocked out, tell them how many exact hours they still need today
+                message = `Clocked out. Need ${Math.floor(leftEffective / 60)}h ${Math.floor(leftEffective % 60)}m more. (V2 API)`;
             }
         }
 

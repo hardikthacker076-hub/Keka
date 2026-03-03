@@ -502,7 +502,7 @@
                         <option value="60" style="background: #1e2532;">Every 60m</option>
                     </select>
                 </div>
-                v2.01 | Direct API (40h Effective Target)
+                v2.03 | Direct API Sync (40h Effective Target)
             </div>
             </div><!-- end keka-panel-body -->
         `;
@@ -804,16 +804,19 @@
                                 const isLeave = leaveKeywords.some(kw => txtUpper.includes(kw));
                                 const mentionsHalfDay = txtUpper.includes("HALF DAY");
 
-                                // Extract hours
-                                const timeMatches = params.match(/(\d+)h\s+(\d+)m/g);
+                                // Extract hours securely
                                 let workedMinutes = 0;
+                                const timeMatches = params.match(/(\d+)h\s+(\d+)m/g);
                                 if (timeMatches && timeMatches.length > 0) {
-                                    const grossMatch = timeMatches.length >= 1 ? timeMatches[timeMatches.length - 1] : "0h 0m";
+                                    // Use the LAST matched duration string (usually Total Effective)
+                                    const grossMatch = timeMatches[timeMatches.length - 1];
                                     const parts = grossMatch.match(/(\d+)h\s+(\d+)m/);
-                                    if (parts) workedMinutes = (parseInt(parts[1]) * 60) + parseInt(parts[2]);
+                                    if (parts) {
+                                        workedMinutes = (parseInt(parts[1], 10) * 60) + parseInt(parts[2], 10);
+                                    }
                                 }
                                 const hasHours = workedMinutes > 0;
-                                const workedFullDay = workedMinutes > 300; // > 5 hours
+                                const workedFullDay = workedMinutes > 240; // > 4 hours (Keka logic for half day)
 
                                 // Calculate Target for this day
                                 let dayGrossTarget = 0;
