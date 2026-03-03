@@ -211,26 +211,22 @@ async function fetchKekaData() {
         // So they need to work `todayEffTarget - todayEffective` minutes *from the start of the last punch in*.
         const leftEffective = Math.max(0, todayEffTarget - todayEffective);
 
-        let message = "";
         let logoffDateObj = null;
 
         if (totalEffective >= targetEffective || leftEffective <= 0) {
-            message = "GOAL MET! 🎉 (V2 API · 40h)";
-        } else {
-            // Target not met yet. Evaluate if actively clocking.
-            if (isClockedIn && lastInTime) {
-                // Determine Logoff Time from the exact Start Time of the current live session
-                logoffDateObj = new Date(lastInTime.getTime() + (leftEffective * 60000));
+            message = "GOAL MET! 🎉";
+        } else if (lastInTime) {
+            // Determine Logoff Time from the exact Start Time of the current/last session blindly
+            logoffDateObj = new Date(lastInTime.getTime() + (leftEffective * 60000));
 
-                if (logoffDateObj < now) {
-                    message = "GOAL MET! 🎉 (V2 API · 40h)";
-                } else {
-                    message = `Logoff at ${formatLogoffTime(logoffDateObj)} (V2 API · 40h)`;
-                }
+            if (logoffDateObj < now && isClockedIn) {
+                message = "GOAL MET! 🎉";
             } else {
-                // If clocked out, tell them how many exact hours they still need today
-                message = `Clocked out. Need ${Math.floor(leftEffective / 60)}h ${Math.floor(leftEffective % 60)}m more. (V2 API)`;
+                message = `Logoff at ${formatLogoffTime(logoffDateObj)}`;
             }
+        } else {
+            // Absolute fallback if literally no punches exist today
+            message = `Need ${Math.floor(leftEffective / 60)}h ${Math.floor(leftEffective % 60)}m more today`;
         }
 
         // --- Execute Notification ---
