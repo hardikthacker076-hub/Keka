@@ -1,4 +1,8 @@
-const gross = [4*60, 6*60 + 5, 9*60 + 6, 9*60 + 1, 8*60 + 22];
-const eff = [4*60, 6*60 + 5, 8*60 + 5, 8*60 + 11, 7*60 + 17];
-console.log("Gross sum:", gross.reduce((a,b)=>a+b, 0) / 60, "hrs");
-console.log("Eff sum:", eff.reduce((a,b)=>a+b, 0) / 60, "hrs");
+
+const now = new Date("2026-03-03T17:21:00");
+// They worked 3h 33m out of 8h (meaning 4h 27m left to work)
+const leftMinutes = (4 * 60) + 27;
+
+const outDateObj = new Date(now.getTime() + (leftMinutes * 60000));
+console.log("Expected Logoff if calculated right now:", outDateObj.getHours() + ":" + outDateObj.getMinutes());
+

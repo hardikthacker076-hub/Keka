@@ -210,23 +210,22 @@ async function fetchKekaData() {
         // Actually, if we use lastInTime, the API gives us `todayEffective` WITHOUT the current open pair.
         // So they need to work `todayEffTarget - todayEffective` minutes *from the start of the last punch in*.
         const leftEffective = Math.max(0, todayEffTarget - todayEffective);
-
         let logoffDateObj = null;
 
         if (totalEffective >= targetEffective || leftEffective <= 0) {
             message = "GOAL MET! 🎉";
-        } else if (lastInTime) {
-            // Determine Logoff Time from the exact Start Time of the current/last session blindly
-            logoffDateObj = new Date(lastInTime.getTime() + (leftEffective * 60000));
+        } else {
+            // If actively clocked in, project from the start of the current live session
+            // If clocked out, simply project the remaining minutes from exactly right now 
+            // (this perfectly mirrors the V1 Range Calculator's logic for the 21:48 target)
+            const anchorTime = (isClockedIn && lastInTime) ? lastInTime.getTime() : now.getTime();
+            logoffDateObj = new Date(anchorTime + (leftEffective * 60000));
 
             if (logoffDateObj < now && isClockedIn) {
                 message = "GOAL MET! 🎉";
             } else {
                 message = `Logoff at ${formatLogoffTime(logoffDateObj)}`;
             }
-        } else {
-            // Absolute fallback if literally no punches exist today
-            message = `Need ${Math.floor(leftEffective / 60)}h ${Math.floor(leftEffective % 60)}m more today`;
         }
 
         // --- Execute Notification ---
