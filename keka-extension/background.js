@@ -195,25 +195,42 @@ async function fetchKekaData() {
 
         if (targetEffective < 0) targetEffective = 0;
 
-        // Calculate the Final Target using exact V1 UI Parity Math
-        let todayIndex = now.getDay();
-        let daysPassed = 0;
-        if (todayIndex >= 1 && todayIndex <= 5) {
-            daysPassed = todayIndex - 1; // Mon=0, Tue=1, etc.
-        } else if (todayIndex === 6) {
-            daysPassed = 5;
+        // Calculate the Final Target using strict Daily Math (no cross-day deficit roll-over, matching typical Keka UI)
+        let isTodayLeaveOrOff = false;
+
+        if (json && json.data && Array.isArray(json.data)) {
+            for (let dayData of json.data) {
+                const dayDate = new Date(dayData.attendanceDate);
+                dayDate.setHours(0, 0, 0, 0);
+                if (dayDate.getTime() === todayFn.getTime()) {
+                    // Check if it's off or leave
+                    let isLve = false;
+                    if (dayData.leaveDayStatuses && dayData.leaveDayStatuses.length > 0) isLve = true;
+                    if (dayData.leaveDetails && dayData.leaveDetails.length > 0) isLve = true;
+
+                    const dayTypeDesc = (dayData.dayType === 0) ? true : false; // 0 usually means weekend/weekly off
+
+                    if (isLve || dayTypeDesc) {
+                        isTodayLeaveOrOff = true;
+                    }
+                }
+            }
         }
 
-        const prevDaysEffective = totalEffective - todayEffective;
-        const expectedEffPrev = daysPassed * 480; // 8h per previous day
-        const catchupEffective = expectedEffPrev - prevDaysEffective;
+        let message = "";
 
-        // Today's personal target
-        const todayEffTarget = Math.max(0, 480 + catchupEffective);
+        if (isTodayLeaveOrOff && todayEffective === 0 && !isClockedIn) {
+            message = "On Leave / Day Off! 🎉";
+            chrome.notifications.create('keka-notify-v2-' + Date.now(), {
+                type: 'basic',
+                iconUrl: 'icon.png',
+                title: 'Keka Target (Background API)',
+                message: message
+            });
+            return;
+        }
 
-        // Left for today (excluding live session, since Keka's UI left includes live session but the API payload only has closed pairs)
-        // Actually, if we use lastInTime, the API gives us `todayEffective` WITHOUT the current open pair.
-        // So they need to work `todayEffTarget - todayEffective` minutes *from the start of the last punch in*.
+        const todayEffTarget = 480; // strict 8H target per day
         const leftEffective = Math.max(0, todayEffTarget - todayEffective);
         let logoffDateObj = null;
 
@@ -222,7 +239,6 @@ async function fetchKekaData() {
         } else {
             // If actively clocked in, project from the start of the current live session
             // If clocked out, simply project the remaining minutes from exactly right now 
-            // (this perfectly mirrors the V1 Range Calculator's logic for the 21:48 target)
             const anchorTime = (isClockedIn && lastInTime) ? lastInTime.getTime() : now.getTime();
             logoffDateObj = new Date(anchorTime + (leftEffective * 60000));
 
