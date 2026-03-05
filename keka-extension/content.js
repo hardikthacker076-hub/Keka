@@ -545,25 +545,31 @@
         };
 
         if (notifySelect) {
-            // Load saved setting
-            chrome.storage.local.get(['kekaNotifyInterval', 'kekaNotifyEnabled'], (data) => {
-                if (data.kekaNotifyEnabled === false || data.kekaNotifyInterval === 0) {
-                    notifySelect.value = "0";
-                    timerSpan.innerText = "";
-                } else if (data.kekaNotifyInterval === 60) {
-                    notifySelect.value = "60";
-                    updateTimerDisplay();
-                    timerInterval = setInterval(updateTimerDisplay, 1000);
-                } else if (data.kekaNotifyInterval === 1) {
-                    notifySelect.value = "1";
-                    updateTimerDisplay();
-                    timerInterval = setInterval(updateTimerDisplay, 1000);
-                } else {
-                    notifySelect.value = "30"; // Default
-                    updateTimerDisplay();
-                    timerInterval = setInterval(updateTimerDisplay, 1000);
-                }
-            });
+            // Load saved setting — guard against stale extension context after update/reload
+            try {
+                chrome.storage.local.get(['kekaNotifyInterval', 'kekaNotifyEnabled'], (data) => {
+                    if (chrome.runtime.lastError) return; // context already gone
+                    if (data.kekaNotifyEnabled === false || data.kekaNotifyInterval === 0) {
+                        notifySelect.value = "0";
+                        timerSpan.innerText = "";
+                    } else if (data.kekaNotifyInterval === 60) {
+                        notifySelect.value = "60";
+                        updateTimerDisplay();
+                        timerInterval = setInterval(updateTimerDisplay, 1000);
+                    } else if (data.kekaNotifyInterval === 1) {
+                        notifySelect.value = "1";
+                        updateTimerDisplay();
+                        timerInterval = setInterval(updateTimerDisplay, 1000);
+                    } else {
+                        notifySelect.value = "30"; // Default
+                        updateTimerDisplay();
+                        timerInterval = setInterval(updateTimerDisplay, 1000);
+                    }
+                });
+            } catch (e) {
+                // Extension was reloaded — context invalidated, silently ignore
+                console.log("Keka Helper: Extension context invalidated during storage read.", e.message);
+            }
 
             // Save on change
             notifySelect.addEventListener('change', (e) => {
