@@ -320,6 +320,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (request.action === 'TEST_API_FETCH') {
         console.log("Keka Helper (V2): Manually triggered API Fetch!");
         fetchKekaData();
+        sendResponse({ success: true });
     } else if (request.action === 'UPDATE_KEKA_STATUS') {
         chrome.storage.local.set({
             kekaLatestStatus: request.data,

@@ -502,7 +502,7 @@
                         <option value="60" style="background: #1e2532;">Every 60m</option>
                     </select>
                 </div>
-                v2.16 | Weekly Catchup + Holiday-Aware
+                v2.18 | Weekly Catchup + Holiday-Aware
             </div>
             </div><!-- end keka-panel-body -->
         `;
