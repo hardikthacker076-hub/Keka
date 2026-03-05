@@ -597,7 +597,21 @@
                 e.preventDefault();
                 const originalText = testApiBtn.innerText;
                 testApiBtn.innerText = "⏳ Fetching...";
-                chrome.runtime.sendMessage({ action: 'TEST_API_FETCH' });
+                try {
+                    chrome.runtime.sendMessage({ action: 'TEST_API_FETCH' }, (response) => {
+                        if (chrome.runtime.lastError) {
+                            console.warn("Keka Helper: sendMessage error:", chrome.runtime.lastError.message);
+                            testApiBtn.innerText = "❌ Reload page & try again";
+                            setTimeout(() => { testApiBtn.innerText = originalText; }, 3000);
+                            return;
+                        }
+                    });
+                } catch (e) {
+                    console.warn("Keka Helper: Extension context invalidated. Please reload the Keka page.", e.message);
+                    testApiBtn.innerText = "❌ Reload page & try again";
+                    setTimeout(() => { testApiBtn.innerText = originalText; }, 3000);
+                    return;
+                }
 
                 setTimeout(() => {
                     testApiBtn.innerText = originalText;
