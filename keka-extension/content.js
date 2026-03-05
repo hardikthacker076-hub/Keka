@@ -54,7 +54,16 @@
     }
 
     // Web Audio API Helpers — lazy AudioContext (avoids autoplay policy error)
-
+    let _audioCtx = null;
+    function getAudioCtx() {
+        if (!_audioCtx) {
+            _audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        }
+        if (_audioCtx.state === 'suspended') {
+            _audioCtx.resume().catch(() => { });
+        }
+        return _audioCtx;
+    }
 
     function playSuccessSound() {
         const audio = new Audio(chrome.runtime.getURL("assets/claps.mp3"));
@@ -63,9 +72,25 @@
     }
 
     function playFailureSound() {
-        const audio = new Audio(chrome.runtime.getURL("assets/boo.mp3"));
-        audio.volume = 0.5;
-        audio.play().catch(e => console.log("Keka Helper: Could not play boo sound automatically.", e));
+        const audioCtx = getAudioCtx();
+
+        const oscillator = audioCtx.createOscillator();
+        const gainNode = audioCtx.createGain();
+        oscillator.connect(gainNode);
+        gainNode.connect(audioCtx.destination);
+
+        // Sad trombone effect (descending slide)
+        const now = audioCtx.currentTime;
+        oscillator.type = 'triangle';
+        oscillator.frequency.setValueAtTime(196.00, now); // G3
+        oscillator.frequency.linearRampToValueAtTime(130.81, now + 1.5); // Slide down to C3
+
+        // Volume 0.3
+        gainNode.gain.setValueAtTime(0.3, now);
+        gainNode.gain.linearRampToValueAtTime(0.01, now + 1.5);
+
+        oscillator.start(now);
+        oscillator.stop(now + 1.5);
     }
 
     const toHm = (m) => `${Math.floor(m / 60)}h ${m % 60}m`;

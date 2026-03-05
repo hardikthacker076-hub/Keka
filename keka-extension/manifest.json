@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Keka 45h Target Calculator",
-  "version": "2.21",
+  "version": "2.22",
   "description": "Calculates daily logoff time to hit 45 hours weekly gross.",
   "permissions": [
     "notifications",
@@ -32,17 +32,6 @@
         "styles.css"
       ],
       "run_at": "document_start"
-    }
-  ],
-  "web_accessible_resources": [
-    {
-      "resources": [
-        "assets/claps.mp3",
-        "assets/boo.mp3"
-      ],
-      "matches": [
-        "https://*.keka.com/*"
-      ]
     }
   ]
 }
