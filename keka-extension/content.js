@@ -502,7 +502,7 @@
                         <option value="60" style="background: #1e2532;">Every 60m</option>
                     </select>
                 </div>
-                v2.15 | Direct API Sync (40h Effective Target)
+                v2.16 | Weekly Catchup + Holiday-Aware
             </div>
             </div><!-- end keka-panel-body -->
         `;
@@ -1003,6 +1003,10 @@
         // process all rows fresh from the DOM to ensure 100% accuracy
         let deductedGross = 0;
         let deductedEffective = 0;
+        // Per-row tracking of what was EXPECTED on past working days.
+        // Holidays / off days contribute 0 to the expected total.
+        let expectedGrossPrev = 0;
+        let expectedEffPrev = 0;
 
         for (let row of rows) {
             const spans = Array.from(row.querySelectorAll('span'));
@@ -1092,6 +1096,25 @@
                     totalEffective += parseDuration(grossSpan.innerText);
                 }
             }
+
+            // Track what today TARGET was for this past day
+            // Off days / holidays: 0 expected. Half-day leave: 300/240. Full day: 540/480.
+            if (isOffDay) {
+                // holiday or weekly off — 0 expected
+            } else if (isLeave) {
+                if (mentionsHalfDay || (hasWorkedHours && !workedFullDay)) {
+                    expectedGrossPrev += 300;
+                    expectedEffPrev += 240;
+                }
+                // full day leave: 0 expected (already off)
+            } else if (mentionsHalfDay && !workedFullDay) {
+                expectedGrossPrev += 300;
+                expectedEffPrev += 240;
+            } else {
+                // Normal working day
+                expectedGrossPrev += 540;
+                expectedEffPrev += 480;
+            }
         }
 
         if (targetGross < 0) targetGross = 0;
@@ -1178,54 +1201,29 @@
         let catchupEffective = 0;
         let avgNote = "";
 
-        if (loginTime) {
+        if (loginTime || lastActivePunchIn) {
             const todayIndex = now.getDay();
-            let daysPassed = 0;
 
-            if (todayIndex >= 1 && todayIndex <= 5) {
-                daysPassed = todayIndex - 1; // Mon=0, Tue=1, ...
-            } else if (todayIndex === 6) {
-                daysPassed = 5;
-            }
-
-            // CATCHUP: based on previous days ONLY (not today)
+            // HOLIDAY-AWARE WEEKLY CATCHUP FORMULA
+            // expectedGrossPrev / expectedEffPrev are built per-row in the loop above:
+            //   - Normal working day: +540 gross / +480 effective
+            //   - Holiday / off day:  +0 (correctly excluded!)
+            //   - Half-day leave:     +300 / +240
+            //   - Full-day leave:     +0
             const prevDaysGross = totalGross - todayGross;
             const prevDaysEffective = totalEffective - todayEffective;
-            const expectedGrossPrev = daysPassed * 540;  // 9h per previous day
-            const expectedEffPrev = daysPassed * 480;  // 8h per previous day
 
             // Positive = behind (need to catch up), Negative = ahead (can leave early)
-            catchupGross = expectedGrossPrev - prevDaysGross;
-            catchupEffective = expectedEffPrev - prevDaysEffective;
+            const catchupGross = expectedGrossPrev - prevDaysGross;
+            const catchupEffective = expectedEffPrev - prevDaysEffective;
 
-            // Check if Today is an explicitly marked Off Day or Leave Day from the DOM string
-            let isTodayOffOrLeave = false;
-            if (todayRow) {
-                const txt = todayRow.innerText.toUpperCase();
-                const offKeywords = ["HOLIDAY", "HLDY", "WEEKLY OFF", "WO", "FLOATING"];
-                const isOffDay = offKeywords.some(kw => txt.includes(kw));
+            // Today's target adjusted for weekly catchup
+            const todayGrossTarget = Math.max(0, 540 + catchupGross);
+            const todayEffTarget = Math.max(0, 480 + catchupEffective);
 
-                const leaveKeywords = [
-                    "LEAVE", "LWP", "UA", "AB", "CASUAL", "SICK",
-                    "PRIVILEGE", "EARNED", "COMP OFF", "COMP-OFF",
-                    "MATERNITY", "PATERNITY", "BEREAVEMENT", "MARRIAGE", "UNPAID"
-                ];
-                const isLeave = leaveKeywords.some(kw => txt.includes(kw));
-                if (isOffDay || isLeave) isTodayOffOrLeave = true;
-            }
+            console.log(`Keka Helper Catchup: expectedGrossPrev=${expectedGrossPrev}m prevWorked=${prevDaysGross}m catchupGross=${catchupGross}m todayTarget=${todayGrossTarget}m`);
 
-            // Today's personal target (accounts for catchup from previous days)
-            // If it's a leave/off day, target is 0. If yet to start, target is 0.
-            let todayGrossTarget = Math.max(0, 540 + catchupGross);
-            let todayEffTarget = Math.max(0, 480 + catchupEffective);
-
-            if (isTodayOffOrLeave && todayEffective === 0 && !lastActivePunchIn) {
-                todayGrossTarget = 0;
-                todayEffTarget = 0;
-            }
-
-            // LIVE ADJUSTMENT: Keka doesn't count in-progress punch sessions.
-            // If there's an active IN with MISSING out, add (now - lastPunchIn) to the worked totals.
+            // LIVE ADJUSTMENT: add in-progress session time not yet counted by Keka
             let liveMinutes = 0;
             if (lastActivePunchIn) {
                 liveMinutes = Math.max(0, Math.floor((now.getTime() - lastActivePunchIn.getTime()) / 60000));
@@ -1238,64 +1236,34 @@
             leftGross = Math.max(0, todayGrossTarget - todayGrossLive);
             leftEffective = Math.max(0, todayEffTarget - todayEffectiveLive);
 
-            // OUT TIME: NOW + remaining (updates dynamically — breaks push it later)
-            console.log("Keka Helper Calc OUT Time:");
-            console.log(` - NOW: ${formatTime(now)}`);
-            console.log(` - leftGross (min): ${leftGross}`);
-            console.log(` - leftEffective (min): ${leftEffective}`);
-
+            // OUT TIME: NOW + remaining
             const outTimeGross = new Date(now.getTime() + leftGross * 60000);
             const outTimeEffective = new Date(now.getTime() + leftEffective * 60000);
 
-            console.log(` - outTimeGross: ${formatTime(outTimeGross)}`);
-            console.log(` - outTimeEffective: ${formatTime(outTimeEffective)}`);
+            logoffGrossStr = todayGrossLive >= todayGrossTarget
+                ? "GOAL MET! 🎉"
+                : formatTime(outTimeGross);
 
-            logoffGrossStr = "Wait...";
-            if (isTodayOffOrLeave && todayEffectiveLive === 0 && !lastActivePunchIn) {
-                logoffGrossStr = "Day Off! 🎉";
-            } else if (!isTodayOffOrLeave && todayEffectiveLive === 0 && !lastActivePunchIn) {
-                logoffGrossStr = "Yet to Start ⏳";
-            } else if (todayGrossTarget === 0 || todayGrossLive >= todayGrossTarget) {
-                logoffGrossStr = "GOAL MET! 🎉";
-            } else {
-                logoffGrossStr = formatTime(outTimeGross);
-            }
-
-            logoffEffectiveStr = "Wait...";
-            if (isTodayOffOrLeave && todayEffectiveLive === 0 && !lastActivePunchIn) {
-                logoffEffectiveStr = "Day Off! 🎉";
-            } else if (!isTodayOffOrLeave && todayEffectiveLive === 0 && !lastActivePunchIn) {
-                logoffEffectiveStr = "Yet to Start ⏳";
-            } else if (todayEffTarget === 0 || todayEffectiveLive >= todayEffTarget) {
+            if (todayEffectiveLive >= todayEffTarget) {
                 logoffEffectiveStr = "GOAL MET! 🎉";
-                if (!window.kekaCheerPlayed && !isTodayOffOrLeave) {
-                    playSuccessSound();
-                    window.kekaCheerPlayed = true;
-                }
+                if (!window.kekaCheerPlayed) { playSuccessSound(); window.kekaCheerPlayed = true; }
             } else if (todayIndex === 0 || todayIndex === 6) {
                 logoffEffectiveStr = "Week Over 😭";
-                if (!window.kekaSadPlayed) {
-                    playFailureSound();
-                    window.kekaSadPlayed = true;
-                }
+                if (!window.kekaSadPlayed) { playFailureSound(); window.kekaSadPlayed = true; }
             } else {
                 logoffEffectiveStr = formatTime(outTimeEffective);
             }
 
-            // Note: show if catching up or ahead vs weekly target
-            if (isTodayOffOrLeave && todayEffectiveLive === 0 && !lastActivePunchIn) {
-                avgNote = `<span style="font-size:10px; opacity:0.7; font-weight:400; margin-left:4px;">(Enjoy your day!)</span>`;
-            } else if (!isTodayOffOrLeave && todayEffectiveLive === 0 && !lastActivePunchIn) {
-                avgNote = `<span style="font-size:10px; opacity:0.7; font-weight:400; margin-left:4px;">(9h target pending)</span>`;
-            } else if (catchupGross > 0 || catchupEffective > 0) {
+            // Status note
+            if (catchupGross > 0 || catchupEffective > 0) {
                 avgNote = `<span style="font-size:10px; opacity:0.7; font-weight:400; margin-left:4px;">(Catching up)</span>`;
             } else if (catchupGross < -60 || catchupEffective < -60) {
                 avgNote = `<span style="font-size:10px; opacity:0.7; font-weight:400; margin-left:4px;">(Ahead 🎯)</span>`;
+            } else if (liveMinutes > 0) {
+                avgNote = `<span style="font-size:10px; opacity:0.7; font-weight:400; margin-left:4px;">(Live ⏱)</span>`;
             }
 
-            // Visual Feedback / Gamification - based on TODAY's target
-            // Confetti: today's effective goal is met
-            // Sad: week is over AND weekly effective goal wasn't met
+            // Confetti / Sad animations
             const todayGoalMet = leftEffective === 0;
             const weekIsOver = todayIndex === 0 || todayIndex === 6;
             const weekGoalMissed = weeklyRemainEffective > 0;
