@@ -502,7 +502,7 @@
                         <option value="60" style="background: #1e2532;">Every 60m</option>
                     </select>
                 </div>
-                v2.13 | Direct API Sync (40h Effective Target)
+                v2.14 | Direct API Sync (40h Effective Target)
             </div>
             </div><!-- end keka-panel-body -->
         `;
@@ -1017,8 +1017,8 @@
             const txt = row.innerText.toUpperCase();
             console.log("Keka Helper Process Row:", { date: dateStr, text: txt });
 
-            const offKeywords = ["HOLIDAY", "HLDY", "WEEKLY OFF", "WO", "FLOATING"];
-            const isOffDay = offKeywords.some(kw => txt.includes(kw));
+            const offKeywords = ["HOLIDAY", "HLDY", "WEEKLY OFF", "WEEKLY-OFF", "WO", "FLOATING"];
+            const isOffDay = offKeywords.some(kw => txt.includes(kw) || txt.includes("REST DAY"));
 
             const leaveKeywords = [
                 "LEAVE", "LWP", "UA", "AB", "CASUAL", "SICK",
