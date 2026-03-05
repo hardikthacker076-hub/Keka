@@ -502,7 +502,7 @@
                         <option value="60" style="background: #1e2532;">Every 60m</option>
                     </select>
                 </div>
-                v2.12 | Direct API Sync (40h Effective Target)
+                v2.13 | Direct API Sync (40h Effective Target)
             </div>
             </div><!-- end keka-panel-body -->
         `;
@@ -1119,8 +1119,11 @@
 
             for (let i = 0; i < 14; i++) {
                 await new Promise(r => setTimeout(r, 250));
-                // specifically query within the todayRow rather than globally grabbing the first hidden menu from Monday
-                const dropdown = todayRow.querySelector('.dropdown-menu-logs');
+                // Keka attaches dropdowns to the body dynamically. 
+                // Therefore, the most recently clicked row's dropdown is always the last one in the DOM.
+                const allDropdowns = document.querySelectorAll('.dropdown-menu-logs');
+                const dropdown = allDropdowns.length > 0 ? allDropdowns[allDropdowns.length - 1] : null;
+
                 if (dropdown) {
                     // Use textContent (works on hidden/off-screen elements, unlike innerText)
                     const txt = dropdown.textContent || '';
