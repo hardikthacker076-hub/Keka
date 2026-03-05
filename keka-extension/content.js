@@ -66,9 +66,61 @@
     }
 
     function playSuccessSound() {
-        const audio = new Audio(chrome.runtime.getURL("assets/claps.mp3"));
-        audio.volume = 0.5;
-        audio.play().catch(e => console.log("Keka Helper: Could not play claps sound automatically.", e));
+        const audioCtx = getAudioCtx();
+
+        const now = audioCtx.currentTime;
+
+        // 1. Fanfare (Trumpet-like waves)
+        const frequencies = [523.25, 659.25, 783.99, 1046.50]; // C Major
+        frequencies.forEach((freq, i) => {
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.connect(gain);
+            gain.connect(audioCtx.destination);
+
+            osc.type = 'sawtooth'; // Brighter sound
+            osc.frequency.setValueAtTime(freq, now);
+
+            // Staggered start
+            const start = now + (i * 0.05);
+
+            gain.gain.setValueAtTime(0, start);
+            gain.gain.linearRampToValueAtTime(0.15, start + 0.1);
+            gain.gain.exponentialRampToValueAtTime(0.001, start + 1.5);
+
+            osc.start(start);
+            osc.stop(start + 1.5);
+        });
+
+        // 2. Applause / Cheering (Filtered White Noise)
+        const bufferSize = audioCtx.sampleRate * 2.5; // 2.5 seconds
+        const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
+        const data = buffer.getChannelData(0);
+
+        for (let i = 0; i < bufferSize; i++) {
+            data[i] = (Math.random() * 2 - 1) * 0.5; // White noise
+        }
+
+        const noise = audioCtx.createBufferSource();
+        noise.buffer = buffer;
+
+        const noiseGain = audioCtx.createGain();
+        const filter = audioCtx.createBiquadFilter();
+
+        filter.type = 'lowpass';
+        filter.frequency.value = 1000; // Muffle it a bit to sound like a crowd
+
+        noise.connect(filter);
+        filter.connect(noiseGain);
+        noiseGain.connect(audioCtx.destination);
+
+        // Envelope for applause (burst then fade)
+        noiseGain.gain.setValueAtTime(0, now);
+        noiseGain.gain.linearRampToValueAtTime(0.25, now + 0.1);
+        noiseGain.gain.exponentialRampToValueAtTime(0.001, now + 2.5);
+
+        noise.start(now);
+        noise.stop(now + 2.5);
     }
 
     function playFailureSound() {
