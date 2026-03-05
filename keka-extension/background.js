@@ -230,6 +230,17 @@ async function fetchKekaData() {
             return;
         }
 
+        if (todayEffective === 0 && !isClockedIn) {
+            message = "Yet to Start ⏳";
+            chrome.notifications.create('keka-notify-v2-' + Date.now(), {
+                type: 'basic',
+                iconUrl: 'icon.png',
+                title: 'Keka Target (Background API)',
+                message: message
+            });
+            return;
+        }
+
         const todayEffTarget = 480; // strict 8H target per day
         const leftEffective = Math.max(0, todayEffTarget - todayEffective);
         let logoffDateObj = null;
