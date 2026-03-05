@@ -502,7 +502,7 @@
                         <option value="60" style="background: #1e2532;">Every 60m</option>
                     </select>
                 </div>
-                v2.14 | Direct API Sync (40h Effective Target)
+                v2.15 | Direct API Sync (40h Effective Target)
             </div>
             </div><!-- end keka-panel-body -->
         `;
@@ -962,7 +962,10 @@
 
         // No caching - always calculate fresh from DOM for real-time accuracy
 
-        const rows = document.querySelectorAll('employee-attendance-list-view .border-bottom.on-hover');
+        // Select ALL border-bottom rows, NOT just .on-hover ones.
+        // Holiday/off rows use a different background class and don't get .on-hover,
+        // so the old selector silently skipped them, causing a huge inflated target.
+        const rows = document.querySelectorAll('employee-attendance-list-view .border-bottom');
         if (rows.length === 0) {
             console.log("Keka Helper: No attendance rows found. Page may still be loading...");
             // Retry up to 3 times with increasing delays
