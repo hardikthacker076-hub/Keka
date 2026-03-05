@@ -486,9 +486,6 @@
             <button id="keka-refresh-panel" class="keka-btn keka-btn-secondary">
                 ↻ Refresh Today's Data
             </button>
-            <button id="keka-test-api-btn" class="keka-btn keka-btn-primary" style="margin-top: 8px; background: rgba(52, 152, 219, 0.2); border-color: rgba(52, 152, 219, 0.4); color: #3498db;">
-                🚀 Test V2 API Notification
-            </button>
             <div style="font-size: 11px; color: rgba(255,255,255,0.4); text-align: center; margin-top: 15px;">
                 <div style="display:flex; justify-content:space-between; align-items:center; background: rgba(0,0,0,0.2); padding: 8px 12px; border-radius: 6px; margin-bottom: 8px;">
                     <span style="font-weight: 500; color: rgba(255,255,255,0.7);">Desktop Notifications</span>
@@ -497,12 +494,11 @@
                     </div>
                     <select id="keka-notify-select" style="background: rgba(255,255,255,0.1); color: white; border: 1px solid rgba(255,255,255,0.2); border-radius: 4px; padding: 2px 5px; font-size: 11px; cursor: pointer; outline: none;">
                         <option value="0" style="background: #1e2532;">Off</option>
-                        <option value="1" style="background: #1e2532;">Test 1m</option>
                         <option value="30" style="background: #1e2532;">Every 30m</option>
                         <option value="60" style="background: #1e2532;">Every 60m</option>
                     </select>
                 </div>
-                v2.18 | Weekly Catchup + Holiday-Aware
+                v2.19 | Configured for 40h week
             </div>
             </div><!-- end keka-panel-body -->
         `;
@@ -556,10 +552,6 @@
                         notifySelect.value = "60";
                         updateTimerDisplay();
                         timerInterval = setInterval(updateTimerDisplay, 1000);
-                    } else if (data.kekaNotifyInterval === 1) {
-                        notifySelect.value = "1";
-                        updateTimerDisplay();
-                        timerInterval = setInterval(updateTimerDisplay, 1000);
                     } else {
                         notifySelect.value = "30"; // Default
                         updateTimerDisplay();
@@ -590,35 +582,6 @@
                 }
             });
         }
-
-        const testApiBtn = document.getElementById('keka-test-api-btn');
-        if (testApiBtn) {
-            testApiBtn.onclick = (e) => {
-                e.preventDefault();
-                const originalText = testApiBtn.innerText;
-                testApiBtn.innerText = "⏳ Fetching...";
-                try {
-                    chrome.runtime.sendMessage({ action: 'TEST_API_FETCH' }, (response) => {
-                        if (chrome.runtime.lastError) {
-                            console.warn("Keka Helper: sendMessage error:", chrome.runtime.lastError.message);
-                            testApiBtn.innerText = "❌ Reload page & try again";
-                            setTimeout(() => { testApiBtn.innerText = originalText; }, 3000);
-                            return;
-                        }
-                    });
-                } catch (e) {
-                    console.warn("Keka Helper: Extension context invalidated. Please reload the Keka page.", e.message);
-                    testApiBtn.innerText = "❌ Reload page & try again";
-                    setTimeout(() => { testApiBtn.innerText = originalText; }, 3000);
-                    return;
-                }
-
-                setTimeout(() => {
-                    testApiBtn.innerText = originalText;
-                }, 2000);
-            };
-        }
-        // ----------------------------------------
 
         // Toggle panel on click
         iconButton.onclick = (e) => {
