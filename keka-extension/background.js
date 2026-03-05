@@ -116,6 +116,9 @@ async function fetchKekaData() {
         let todayEffective = 0;
         let isClockedIn = false;
         let lastInTime = null;
+        // Per-row tracking of EXPECTED effective hours from past days.
+        // Holidays and off days contribute 0; normal working days contribute 480.
+        let expectedEffPrev = 0;
 
         const now = new Date();
         const monday = getMonday(now);
@@ -170,6 +173,22 @@ async function fetchKekaData() {
 
                 // Sum up hours
                 totalEffective += effectiveMinutes;
+
+                // Track expected hours for PAST days (not today)
+                if (dayDate.getTime() !== todayFn.getTime()) {
+                    if (isOffDay) {
+                        // holiday / weekly off → 0 expected
+                    } else if (isLeave) {
+                        if (mentionsHalfDay || (hasWorkedHours && !workedFullDay)) {
+                            expectedEffPrev += 240; // half day leave
+                        }
+                        // full day leave → 0 expected
+                    } else if (mentionsHalfDay && !workedFullDay) {
+                        expectedEffPrev += 240;
+                    } else {
+                        expectedEffPrev += 480; // normal working day
+                    }
+                }
 
                 // Handle "Today" logic specifically
                 if (dayDate.getTime() === todayFn.getTime()) {
@@ -241,15 +260,20 @@ async function fetchKekaData() {
             return;
         }
 
-        const todayEffTarget = 480; // strict 8H target per day
+        // HOLIDAY-AWARE WEEKLY CATCHUP TARGET
+        // expectedEffPrev is 0 for holidays, 480 for working days, 240 for half-day leaves.
+        const prevDaysEffective = totalEffective - todayEffective;
+        const catchupEffective = expectedEffPrev - prevDaysEffective; // positive = behind, negative = ahead
+        const todayEffTarget = Math.max(0, 480 + catchupEffective);
         const leftEffective = Math.max(0, todayEffTarget - todayEffective);
+
+        console.log(`Keka BG Catchup: expectedEffPrev=${expectedEffPrev}m prevWorked=${prevDaysEffective}m catchup=${catchupEffective}m todayTarget=${todayEffTarget}m`);
+
         let logoffDateObj = null;
 
         if (totalEffective >= targetEffective || leftEffective <= 0) {
             message = "GOAL MET! 🎉";
         } else {
-            // If actively clocked in, project from the start of the current live session
-            // If clocked out, simply project the remaining minutes from exactly right now 
             const anchorTime = (isClockedIn && lastInTime) ? lastInTime.getTime() : now.getTime();
             logoffDateObj = new Date(anchorTime + (leftEffective * 60000));
 
