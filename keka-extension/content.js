@@ -502,7 +502,7 @@
                         <option value="60" style="background: #1e2532;">Every 60m</option>
                     </select>
                 </div>
-                v2.10 | Direct API Sync (40h Effective Target)
+                v2.11 | Direct API Sync (40h Effective Target)
             </div>
             </div><!-- end keka-panel-body -->
         `;
@@ -1191,9 +1191,31 @@
             catchupGross = expectedGrossPrev - prevDaysGross;
             catchupEffective = expectedEffPrev - prevDaysEffective;
 
+            // Check if Today is an explicitly marked Off Day or Leave Day from the DOM string
+            let isTodayOffOrLeave = false;
+            if (todayRow) {
+                const txt = todayRow.innerText.toUpperCase();
+                const offKeywords = ["HOLIDAY", "HLDY", "WEEKLY OFF", "WO", "FLOATING"];
+                const isOffDay = offKeywords.some(kw => txt.includes(kw));
+
+                const leaveKeywords = [
+                    "LEAVE", "LWP", "UA", "AB", "CASUAL", "SICK",
+                    "PRIVILEGE", "EARNED", "COMP OFF", "COMP-OFF",
+                    "MATERNITY", "PATERNITY", "BEREAVEMENT", "MARRIAGE", "UNPAID"
+                ];
+                const isLeave = leaveKeywords.some(kw => txt.includes(kw));
+                if (isOffDay || isLeave) isTodayOffOrLeave = true;
+            }
+
             // Today's personal target (accounts for catchup from previous days)
-            const todayGrossTarget = Math.max(0, 540 + catchupGross);
-            const todayEffTarget = Math.max(0, 480 + catchupEffective);
+            // If it's a leave/off day, target is 0. If yet to start, target is 0.
+            let todayGrossTarget = Math.max(0, 540 + catchupGross);
+            let todayEffTarget = Math.max(0, 480 + catchupEffective);
+
+            if (isTodayOffOrLeave && todayEffective === 0 && !lastActivePunchIn) {
+                todayGrossTarget = 0;
+                todayEffTarget = 0;
+            }
 
             // LIVE ADJUSTMENT: Keka doesn't count in-progress punch sessions.
             // If there's an active IN with MISSING out, add (now - lastPunchIn) to the worked totals.
@@ -1222,16 +1244,24 @@
             console.log(` - outTimeEffective: ${formatTime(outTimeEffective)}`);
 
             logoffGrossStr = "Wait...";
-            if (todayGrossTarget === 0 || todayGrossLive >= todayGrossTarget) {
+            if (isTodayOffOrLeave && todayEffectiveLive === 0 && !lastActivePunchIn) {
+                logoffGrossStr = "Day Off! 🎉";
+            } else if (!isTodayOffOrLeave && todayEffectiveLive === 0 && !lastActivePunchIn) {
+                logoffGrossStr = "Yet to Start ⏳";
+            } else if (todayGrossTarget === 0 || todayGrossLive >= todayGrossTarget) {
                 logoffGrossStr = "GOAL MET! 🎉";
             } else {
                 logoffGrossStr = formatTime(outTimeGross);
             }
 
             logoffEffectiveStr = "Wait...";
-            if (todayEffTarget === 0 || todayEffectiveLive >= todayEffTarget) {
+            if (isTodayOffOrLeave && todayEffectiveLive === 0 && !lastActivePunchIn) {
+                logoffEffectiveStr = "Day Off! 🎉";
+            } else if (!isTodayOffOrLeave && todayEffectiveLive === 0 && !lastActivePunchIn) {
+                logoffEffectiveStr = "Yet to Start ⏳";
+            } else if (todayEffTarget === 0 || todayEffectiveLive >= todayEffTarget) {
                 logoffEffectiveStr = "GOAL MET! 🎉";
-                if (!window.kekaCheerPlayed) {
+                if (!window.kekaCheerPlayed && !isTodayOffOrLeave) {
                     playSuccessSound();
                     window.kekaCheerPlayed = true;
                 }
@@ -1246,7 +1276,11 @@
             }
 
             // Note: show if catching up or ahead vs weekly target
-            if (catchupGross > 0 || catchupEffective > 0) {
+            if (isTodayOffOrLeave && todayEffectiveLive === 0 && !lastActivePunchIn) {
+                avgNote = `<span style="font-size:10px; opacity:0.7; font-weight:400; margin-left:4px;">(Enjoy your day!)</span>`;
+            } else if (!isTodayOffOrLeave && todayEffectiveLive === 0 && !lastActivePunchIn) {
+                avgNote = `<span style="font-size:10px; opacity:0.7; font-weight:400; margin-left:4px;">(9h target pending)</span>`;
+            } else if (catchupGross > 0 || catchupEffective > 0) {
                 avgNote = `<span style="font-size:10px; opacity:0.7; font-weight:400; margin-left:4px;">(Catching up)</span>`;
             } else if (catchupGross < -60 || catchupEffective < -60) {
                 avgNote = `<span style="font-size:10px; opacity:0.7; font-weight:400; margin-left:4px;">(Ahead 🎯)</span>`;
