@@ -1,48 +1,15 @@
-/* Keka Calculator (Daily Average Explicit v13) */
+/* Keka Calculator (API v3) */
 
 (function () {
     'use strict';
-    console.log("Keka Helper: Script started (v101) - Document ready state: " + document.readyState);
+    console.log("Keka Helper (V3): Starting content script...");
 
     const CONFIG = {
-        grossTarget: 45,
-        effectiveTarget: 40,
-        deductionHoliday: 9,
-        deductionHalfDay: 5
+        version: "2.24"
     };
 
     let hasCalculated = false;
     let observer = null;
-    let lastActivePunchIn = null; // Global state for live tracking
-
-    function parseDuration(text) {
-        if (!text) return 0;
-        const match = text.match(/(\d+)h\s+(\d+)m/);
-        if (match) {
-            return (parseInt(match[1], 10) * 60) + parseInt(match[2], 10);
-        }
-        return 0;
-    }
-
-    function parseTime(timeStr) {
-        if (!timeStr) return null;
-        const now = new Date();
-        const date = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-
-        let cleanTime = timeStr.trim().split(' ')[0];
-        let parts = cleanTime.split(':');
-
-        if (parts.length >= 2) {
-            const h = parseInt(parts[0]);
-            date.setHours(h, parseInt(parts[1]), parseInt(parts[2] || 0));
-            return date;
-        }
-        return null;
-    }
-
-    function formatTime(date) {
-        return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    }
 
     function getMonday(d) {
         d = new Date(d);
@@ -53,20 +20,31 @@
         return d;
     }
 
-    // Web Audio API Helpers — lazy AudioContext (avoids autoplay policy error)
+    // Web Audio API Helpers — only create AudioContext after user gesture (autoplay policy)
     let _audioCtx = null;
+    let _audioUnlocked = false;
+
+    // Unlock AudioContext on first user click anywhere on the page
+    document.addEventListener('click', function unlockAudio() {
+        if (_audioUnlocked) return;
+        _audioUnlocked = true;
+        if (_audioCtx && _audioCtx.state === 'suspended') {
+            _audioCtx.resume().catch(() => { });
+        }
+        document.removeEventListener('click', unlockAudio);
+    }, true);
+
     function getAudioCtx() {
+        if (!_audioUnlocked) return null;  // not yet unlocked by user gesture
         if (!_audioCtx) {
             _audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-        }
-        if (_audioCtx.state === 'suspended') {
-            _audioCtx.resume().catch(() => { });
         }
         return _audioCtx;
     }
 
     function playSuccessSound() {
         const audioCtx = getAudioCtx();
+        if (!audioCtx) return;  // silently skip if not unlocked
 
         const now = audioCtx.currentTime;
 
@@ -145,58 +123,69 @@
         oscillator.stop(now + 1.5);
     }
 
-    const toHm = (m) => `${Math.floor(m / 60)}h ${m % 60}m`;
 
-    function createBanner(grossLogoff, effectiveLogoff, grossLeft, effectiveLeft, grossWorked, effectiveWorked, avgNote) {
-        // Try multiple selectors to find the container
+    function createBanner(grossLogoff, effectiveLogoff, grossLeft, effectiveLeft, grossWorked, effectiveWorked, avgNote, breakMins) {
+        ensureIconInDom(grossLogoff, effectiveLogoff, grossLeft, effectiveLeft, grossWorked, effectiveWorked, avgNote, breakMins);
+    }
+
+    // Polls for the "24 hour format" label and places the icon next to it.
+    // Falls back to fixed position ONLY after 10 seconds of waiting.
+    let _iconPlacementTimer = null;
+    let _iconPlacementAttempts = 0;
+    let _pendingBannerArgs = null;
+
+    function ensureIconInDom(...args) {
+        _pendingBannerArgs = args;
+        if (!document.getElementById('keka-helper-icon')) {
+            _iconPlacementAttempts = 0;
+            _tryPlaceIcon();
+        } else {
+            // Icon already exists — rebuild in place (preserves the current container)
+            const existing = document.getElementById('keka-helper-icon');
+            const container = existing ? existing.parentElement : document.body;
+            _buildIconAndPanel(container, ...args);
+        }
+    }
+
+    function _tryPlaceIcon() {
+        _iconPlacementAttempts++;
+
+        // Search for the 24-hour format label
         let actionsSection = null;
-
-        // Method 1: Find by "24 hour format" label
         const label = Array.from(document.querySelectorAll('label')).find(el => el.textContent.includes('24 hour format'));
         if (label) {
-            actionsSection = label.parentElement;
-            console.log("Keka Helper: Found actions section via '24 hour format' label");
+            actionsSection = label.closest('div[class]') || label.parentElement;
         }
 
-        // Method 2: Fallback - find any label with a toggle switch
+        // Fallback: any toggle label
         if (!actionsSection) {
-            const toggleLabel = Array.from(document.querySelectorAll('label')).find(el => {
-                const toggle = el.querySelector('input[type="checkbox"]');
-                return toggle !== null;
-            });
-            if (toggleLabel) {
-                actionsSection = toggleLabel.parentElement;
-                console.log("Keka Helper: Found actions section via toggle switch fallback");
-            }
+            const tog = Array.from(document.querySelectorAll('label')).find(el => el.querySelector('input[type="checkbox"]'));
+            if (tog) actionsSection = tog.closest('div[class]') || tog.parentElement;
         }
 
-        // Method 3: Fallback - find the header area directly
-        if (!actionsSection) {
-            const header = document.querySelector('employee-attendance-list-view');
-            if (header) {
-                actionsSection = header.querySelector('div[class*="flex"], div[class*="header"]');
-                console.log("Keka Helper: Found actions section via header fallback");
-            }
+        if (actionsSection) {
+            // Found — build the icon in place
+            _buildIconAndPanel(actionsSection, ...(_pendingBannerArgs || []));
+            return;
         }
 
-        // Method 4: Last resort - create fixed position container
-        if (!actionsSection) {
-            console.log("Keka Helper: All selector methods failed. Using fixed-position fallback...");
-
-            // Create a fixed container in the top-right corner
+        // Not found yet — retry up to 10 s (every 200 ms)
+        if (_iconPlacementAttempts < 50) {
+            _iconPlacementTimer = setTimeout(_tryPlaceIcon, 200);
+        } else {
+            // Final fallback: fixed position
             let fixedContainer = document.getElementById('keka-fixed-container');
             if (!fixedContainer) {
                 fixedContainer = document.createElement('div');
                 fixedContainer.id = 'keka-fixed-container';
-                fixedContainer.style.cssText = 'position: fixed; top: 70px; right: 20px; z-index: 9999;';
+                fixedContainer.style.cssText = 'position:fixed;top:70px;right:20px;z-index:9999;display:flex;align-items:center;';
                 document.body.appendChild(fixedContainer);
-                console.log("Keka Helper: Created fixed-position container");
             }
-            actionsSection = fixedContainer;
+            _buildIconAndPanel(fixedContainer, ...(_pendingBannerArgs || []));
         }
+    }
 
-
-
+    function _buildIconAndPanel(actionsSection, grossLogoff, effectiveLogoff, grossLeft, effectiveLeft, grossWorked, effectiveWorked, avgNote, breakMins) {
         // Remove existing elements if present
         const existingIcon = document.getElementById('keka-helper-icon');
         const existingPanel = document.getElementById('keka-helper-panel');
@@ -207,23 +196,6 @@
         const iconButton = document.createElement('div');
         iconButton.id = 'keka-helper-icon';
         iconButton.title = 'Keka Helper';
-        iconButton.style.cssText = [
-            'position: relative',
-            'display: inline-flex',
-            'align-items: center',
-            'gap: 5px',
-            'padding: 3px 10px 3px 7px',
-            'margin-left: 10px',
-            'cursor: pointer',
-            'border-radius: 20px',
-            'background: linear-gradient(135deg, rgba(243,156,18,0.15), rgba(241,196,15,0.08))',
-            'border: 1px solid rgba(243,156,18,0.4)',
-            'transition: all 0.2s',
-            'user-select: none'
-        ].join(';');
-
-        iconButton.innerHTML = `<span style="font-size:17px; line-height:1; display:flex; align-items:center;">⏱</span>`;
-
         iconButton.style.cssText = [
             'position: relative',
             'display: inline-flex',
@@ -439,67 +411,86 @@
                                 <span class="keka-card-meta-label">Left</span>
                                 <span class="keka-card-meta-val">${effectiveLeft}</span>
                             </div>
-                        </div>
                     </div>
+                </div>
+
+                </div>
+
+                <!-- Break Time Display -->
+                <div style="text-align: center; margin-top: 10px; margin-bottom: 12px;">
+                    <span style="font-size: 11px; color: rgba(255,255,255,0.4); text-transform: uppercase; letter-spacing: 1px; font-weight: 600;">Break Taken: </span>
+                    <span id="keka-break-val" style="font-size: 12px; color: #ffeaa7; font-weight: 700;">${breakMins || '--:--'}</span>
                 </div>
 
                 <div class="keka-divider"></div>
 
-            <!-- Range Calculator -->
-            <div class="keka-label">Range Calculator</div>
-            
-            <!-- Shortcuts (Always Visible) -->
-            <div class="keka-shortcuts-row">
-                <button id="keka-sc-this-week" class="keka-shortcut-btn">This Week</button>
-                <button id="keka-sc-last-week" class="keka-shortcut-btn">Last Week</button>
-                <button id="keka-sc-this-month" class="keka-shortcut-btn">This Month</button>
-                <button id="keka-toggle-custom" class="keka-shortcut-btn">Custom</button>
-            </div>
-
-            <!-- Custom Date Inputs (Hidden by default) -->
-            <div id="keka-custom-container" style="display: none;">
-                <div class="keka-input-group">
-                    <input type="date" id="keka-start-date" max="${today}" class="keka-input">
-                    <input type="date" id="keka-end-date" max="${today}" class="keka-input">
+                <!-- Range Calculator -->
+                <div class="keka-label">Range Calculator</div>
+                
+                <!-- Shortcuts (Always Visible) -->
+                <div class="keka-shortcuts-row">
+                    <button id="keka-sc-this-week" class="keka-shortcut-btn">This Week</button>
+                    <button id="keka-sc-last-week" class="keka-shortcut-btn">Last Week</button>
+                    <button id="keka-sc-this-month" class="keka-shortcut-btn">This Month</button>
+                    <button id="keka-toggle-custom" class="keka-shortcut-btn">Custom</button>
                 </div>
-                <div style="display: flex; gap: 8px;">
-                    <button id="keka-calc-range" class="keka-btn keka-btn-primary" style="flex: 1;">
-                        Calculate Range
-                    </button>
-                    <button id="keka-clear-range" class="keka-btn" style="width: auto !important; background: rgba(231, 76, 60, 0.2); border-color: rgba(231, 76, 60, 0.4); color: rgba(231, 76, 60, 0.9); padding: 0 12px; font-size: 14px; min-width: 40px;" title="Clear Dates">✕</button>
-                </div>
-            </div> <!-- End of Custom Container -->
 
-            <!-- Range Results (Always visible when populated) -->
-            <div id="keka-range-result" class="keka-result-card" style="display: none;">
-                <div style="display: flex; justify-content: space-between; margin-bottom: 6px;">
-                    <span style="font-size: 12px; opacity: 0.7;">Total Gross</span>
-                    <span id="range-gross-total" style="font-size: 12px; font-weight: 700; color: #ffeaa7;">0h 0m</span>
-                </div>
-                <div style="display: flex; justify-content: space-between;">
-                    <span style="font-size: 12px; opacity: 0.7;">Total Effective</span>
-                    <span id="range-effective-total" style="font-size: 12px; font-weight: 700; color: #55efc4;">0h 0m</span>
-                </div>
-            </div>
-
-
-            <button id="keka-refresh-panel" class="keka-btn keka-btn-secondary">
-                ↻ Refresh Today's Data
-            </button>
-            <div style="font-size: 11px; color: rgba(255,255,255,0.4); text-align: center; margin-top: 15px;">
-                <div style="display:flex; justify-content:space-between; align-items:center; background: rgba(0,0,0,0.2); padding: 8px 12px; border-radius: 6px; margin-bottom: 8px;">
-                    <span style="font-weight: 500; color: rgba(255,255,255,0.7);">Desktop Notifications</span>
-                    <div style="flex-grow: 1; margin: 0 8px; text-align: left;">
-                        <span id="keka-notify-timer" style="font-size: 10px; color: #f1c40f; display: block; height: 12px; font-variant-numeric: tabular-nums;">--:--</span>
+                <!-- Custom Date Inputs (Hidden by default) -->
+                <div id="keka-custom-container" style="display: none;">
+                    <div class="keka-input-group">
+                        <input type="date" id="keka-start-date" max="${today}" class="keka-input">
+                        <input type="date" id="keka-end-date" max="${today}" class="keka-input">
                     </div>
-                    <select id="keka-notify-select" style="background: rgba(255,255,255,0.1); color: white; border: 1px solid rgba(255,255,255,0.2); border-radius: 4px; padding: 2px 5px; font-size: 11px; cursor: pointer; outline: none;">
-                        <option value="0" style="background: #1e2532;">Off</option>
-                        <option value="30" style="background: #1e2532;">Every 30m</option>
-                        <option value="60" style="background: #1e2532;">Every 60m</option>
-                    </select>
+                    <div style="display: flex; gap: 8px;">
+                        <button id="keka-calc-range" class="keka-btn keka-btn-primary" style="flex: 1;">
+                            Calculate Range
+                        </button>
+                        <button id="keka-clear-range" class="keka-btn" style="width: auto !important; background: rgba(231, 76, 60, 0.2); border-color: rgba(231, 76, 60, 0.4); color: rgba(231, 76, 60, 0.9); padding: 0 12px; font-size: 14px; min-width: 40px;" title="Clear Dates">✕</button>
+                    </div>
+                </div> <!-- End of Custom Container -->
+
+                <!-- Range Results (Always visible when populated) -->
+                <div id="keka-range-result" class="keka-result-card" style="display: none;">
+                    <div style="display: flex; justify-content: space-between; margin-bottom: 6px;">
+                        <span style="font-size: 12px; opacity: 0.7;">Total Gross</span>
+                        <span id="range-gross-total" style="font-size: 12px; font-weight: 700; color: #ffeaa7;">0h 0m</span>
+                    </div>
+                    <div style="display: flex; justify-content: space-between;">
+                        <span style="font-size: 12px; opacity: 0.7;">Total Effective</span>
+                        <span id="range-effective-total" style="font-size: 12px; font-weight: 700; color: #55efc4;">0h 0m</span>
+                    </div>
                 </div>
-                v2.19 | Configured for 40h week
-            </div>
+
+                <!-- Footer Settings Area -->
+                <div style="margin-top: 15px;">
+                    <button id="keka-refresh-panel" class="keka-btn keka-btn-secondary" style="margin-bottom: 12px;">
+                        ↻ Refresh Today's Data
+                    </button>
+                    
+                    <div style="font-size: 11px; color: rgba(255,255,255,0.4); text-align: center;">
+                        <div style="display:flex; justify-content:space-between; align-items:center; background: rgba(0,0,0,0.2); padding: 8px 12px; border-radius: 6px; margin-bottom: 8px;">
+                            <span style="font-weight: 500; color: rgba(255,255,255,0.7);">Desktop Notifications</span>
+                            <div style="flex-grow: 1; margin: 0 8px; text-align: left;">
+                                <span id="keka-notify-timer" style="font-size: 10px; color: #f1c40f; display: block; height: 12px; font-variant-numeric: tabular-nums;">--:--</span>
+                            </div>
+                            <div style="display: flex; gap: 6px; align-items: center;">
+                                <button id="keka-test-notify" class="keka-btn" style="width: auto !important; background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2); padding: 2px 6px; font-size: 10px; text-transform: none; letter-spacing: 0; margin: 0;">Test</button>
+                                <select id="keka-notify-select" style="background: rgba(255,255,255,0.1); color: white; border: 1px solid rgba(255,255,255,0.2); border-radius: 4px; padding: 2px 5px; font-size: 11px; cursor: pointer; outline: none;">
+                                    <option value="0" style="background: #1e2532;">Off</option>
+                                    <option value="30" style="background: #1e2532;">Every 30m</option>
+                                    <option value="60" style="background: #1e2532;">Every 60m</option>
+                                    <option value="120" style="background: #1e2532;">Every 2h</option>
+                                    <option value="240" style="background: #1e2532;">Every 4h</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div style="display:flex; justify-content:space-between; align-items:center; background: rgba(0,0,0,0.2); padding: 8px 12px; border-radius: 6px; margin-bottom: 8px;">
+                            <span style="font-weight: 500; color: rgba(255,255,255,0.7);">Grace Period (14 min)</span>
+                            <input type="checkbox" id="keka-grace-checkbox" style="cursor: pointer; width: 16px; height: 16px; appearance: auto !important; opacity: 1 !important; display: inline-block !important; position: static !important; margin: 0 !important; visibility: visible !important;">
+                        </div>
+                        v${CONFIG.version} | API Mode
+                    </div>
+                </div>
             </div><!-- end keka-panel-body -->
         `;
 
@@ -507,8 +498,9 @@
         actionsSection.appendChild(iconButton);
         iconButton.appendChild(panel);
 
-        // --- NEW: Notification Settings Logic & Timer ---
+        // --- NEW: Notification & Grace Settings Logic ---
         const notifySelect = document.getElementById('keka-notify-select');
+        const graceCheckbox = document.getElementById('keka-grace-checkbox');
         const timerSpan = document.getElementById('keka-notify-timer');
         let timerInterval = null;
 
@@ -540,46 +532,86 @@
             }
         };
 
-        if (notifySelect) {
-            // Load saved setting — guard against stale extension context after update/reload
-            try {
-                chrome.storage.local.get(['kekaNotifyInterval', 'kekaNotifyEnabled'], (data) => {
-                    if (chrome.runtime.lastError) return; // context already gone
+        // Initialize Settings (Notification & Grace)
+        try {
+            chrome.storage.local.get(['kekaNotifyInterval', 'kekaNotifyEnabled', 'kekaGraceEnabled'], (data) => {
+                if (chrome.runtime.lastError) return;
+
+                // Load Notification
+                if (notifySelect) {
                     if (data.kekaNotifyEnabled === false || data.kekaNotifyInterval === 0) {
                         notifySelect.value = "0";
-                        timerSpan.innerText = "";
-                    } else if (data.kekaNotifyInterval === 60) {
-                        notifySelect.value = "60";
-                        updateTimerDisplay();
-                        timerInterval = setInterval(updateTimerDisplay, 1000);
                     } else {
-                        notifySelect.value = "30"; // Default
+                        notifySelect.value = data.kekaNotifyInterval === 60 ? "60" : "30";
                         updateTimerDisplay();
                         timerInterval = setInterval(updateTimerDisplay, 1000);
                     }
-                });
-            } catch (e) {
-                // Extension was reloaded — context invalidated, silently ignore
-                console.log("Keka Helper: Extension context invalidated during storage read.", e.message);
-            }
+                }
 
-            // Save on change
+                // Load Grace
+                if (graceCheckbox) {
+                    graceCheckbox.checked = data.kekaGraceEnabled === true;
+                }
+            });
+        } catch (e) {
+            console.log("Keka Helper: Context invalidated during storage read.");
+        }
+
+        // Notification change
+        if (notifySelect) {
             notifySelect.addEventListener('change', (e) => {
                 const val = parseInt(e.target.value);
                 if (timerInterval) clearInterval(timerInterval);
-
                 if (val === 0) {
                     chrome.storage.local.set({ kekaNotifyEnabled: false, kekaNotifyInterval: 0 });
                     timerSpan.innerText = "";
                 } else {
                     chrome.storage.local.set({ kekaNotifyEnabled: true, kekaNotifyInterval: val });
-                    // Briefly show 'Syncing' until new alarm registers
                     timerSpan.innerText = "Syncing...";
                     setTimeout(() => {
                         updateTimerDisplay();
                         timerInterval = setInterval(updateTimerDisplay, 1000);
                     }, 500);
                 }
+            });
+        }
+
+        // Test Notification Button
+        const testNotifyBtn = document.getElementById('keka-test-notify');
+        if (testNotifyBtn) {
+            testNotifyBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+
+                // Visual feedback
+                const origText = testNotifyBtn.innerText;
+                testNotifyBtn.innerText = 'Sent!';
+                testNotifyBtn.style.opacity = '0.7';
+
+                chrome.runtime.sendMessage({ action: 'TEST_NOTIFICATION' }, (res) => {
+                    setTimeout(() => {
+                        testNotifyBtn.innerText = origText;
+                        testNotifyBtn.style.opacity = '1';
+                    }, 1500);
+                });
+            });
+        }
+
+        // Grace Period change
+        if (graceCheckbox) {
+            graceCheckbox.addEventListener('click', (e) => {
+                // Prevent the click from bubbling up and closing the panel
+                e.stopPropagation();
+            });
+            graceCheckbox.addEventListener('change', (e) => {
+                const enabled = e.target.checked;
+                chrome.storage.local.set({ kekaGraceEnabled: enabled }, () => {
+                    // Trigger immediate refresh of today's data without closing panel
+                    chrome.runtime.sendMessage({ action: 'REFRESH_DATA' }, (response) => {
+                        if (response && response.success && response.stats) {
+                            _updatePanelData(response.stats);
+                        }
+                    });
+                });
             });
         }
 
@@ -697,218 +729,8 @@
 
         if (calcRangeBtn) {
             calcRangeBtn.onclick = (e) => {
-                e.stopPropagation(); // Prevent panel close
-                const startVal = document.getElementById('keka-start-date').value;
-                const endVal = document.getElementById('keka-end-date').value;
-                const resultDiv = document.getElementById('keka-range-result');
-
-                if (!startVal || !endVal) {
-                    alert("Please select both start and end dates.");
-                    return;
-                }
-
-                const startDate = new Date(startVal);
-                const endDate = new Date(endVal);
-                startDate.setHours(0, 0, 0, 0);
-                endDate.setHours(23, 59, 59, 999);
-
-                if (startDate > endDate) {
-                    alert("Start date cannot be after end date.");
-                    return;
-                }
-
-                try {
-                    // Strategy 1: The standard rows we used before
-                    let potentialRows = Array.from(document.querySelectorAll('employee-attendance-list-view .border-bottom'));
-
-                    // Strategy 2: If none found, try a broader search for any list row
-                    if (potentialRows.length === 0) {
-                        potentialRows = Array.from(document.querySelectorAll('.list-view .list-row, .card-body .d-flex'));
-                    }
-
-                    if (potentialRows.length === 0) {
-                        console.warn("Keka Helper: No rows found with standard selectors.");
-                        alert("Could not find attendance rows in the current view. Please ensure the table is visible.");
-                        return;
-                    }
-
-                    let rangeGross = 0;
-                    let rangeEffective = 0;
-                    let foundAny = false;
-                    let foundDates = 0;
-                    let targetGrossInRange = 0;
-                    let targetEffectiveInRange = 0;
-
-                    let currentYear = new Date().getFullYear();
-                    // Try to scrape year from the page header (e.g. "January, 2026")
-                    const pageText = document.body.innerText;
-                    const yearMatch = pageText.match(/\b(?:January|February|March|April|May|June|July|August|September|October|November|December),?\s+(\d{4})\b/);
-                    if (yearMatch) {
-                        currentYear = parseInt(yearMatch[1], 10);
-                        console.log("Keka Helper: Detected year from page:", currentYear);
-                    }
-
-                    potentialRows.forEach(row => {
-                        const params = row.innerText;
-                        if (!params) return;
-
-                        // Flexible Regex: Matches "Thu, 01 Jan" or "Thu 01 Jan"
-                        const dateMatch = params.match(/([A-Za-z]{3},?\s*\d{1,2}\s+[A-Za-z]{3})/);
-
-                        if (dateMatch) {
-                            foundDates++;
-                            const dateStr = dateMatch[0]; // e.g. "Thu, 01 Jan"
-
-                            // Parse Date
-                            const cleanDateStr = dateStr.replace(/,/g, '').replace(/\s+/g, ' '); // "Thu 01 Jan"
-                            const rowDate = new Date(`${cleanDateStr} ${currentYear}`);
-                            rowDate.setHours(12, 0, 0, 0);
-
-                            if (rowDate >= startDate && rowDate <= endDate) {
-                                foundAny = true;
-
-                                // Robust logic for Target Calculation (Sync with Daily Banner Logic)
-                                const txtUpper = params.toUpperCase();
-
-                                // 1. Check for Weekend
-                                const day = rowDate.getDay();
-                                const isWeekend = (day === 0 || day === 6);
-
-                                // 2. Check for Off Days (Holiday, Weekly Off) - Zero Target
-                                const offKeywords = ["HOLIDAY", "HLDY", "WEEKLY OFF", "WO", "FLOATING"];
-                                const isOffDay = offKeywords.some(kw => txtUpper.includes(kw));
-
-                                // 3. Check for Leaves (Casual, Sick, etc.) - Potential Half Day Target
-                                const leaveKeywords = [
-                                    "LEAVE", "LWP", "UA", "AB", "CASUAL", "SICK",
-                                    "PRIVILEGE", "EARNED", "COMP OFF", "COMP-OFF",
-                                    "MATERNITY", "PATERNITY", "BEREAVEMENT", "MARRIAGE", "UNPAID"
-                                ];
-                                const isLeave = leaveKeywords.some(kw => txtUpper.includes(kw));
-                                const mentionsHalfDay = txtUpper.includes("HALF DAY");
-
-                                // Extract hours securely
-                                let workedMinutes = 0;
-                                const timeMatches = params.match(/(\d+)h\s+(\d+)m/g);
-                                if (timeMatches && timeMatches.length > 0) {
-                                    // Use the LAST matched duration string (usually Total Effective)
-                                    const grossMatch = timeMatches[timeMatches.length - 1];
-                                    const parts = grossMatch.match(/(\d+)h\s+(\d+)m/);
-                                    if (parts) {
-                                        workedMinutes = (parseInt(parts[1], 10) * 60) + parseInt(parts[2], 10);
-                                    }
-                                }
-                                const hasHours = workedMinutes > 0;
-                                const workedFullDay = workedMinutes > 240; // > 4 hours (Keka logic for half day)
-
-                                // Calculate Target for this day
-                                let dayGrossTarget = 0;
-                                let dayEffectiveTarget = 0;
-
-                                if (isWeekend || isOffDay) {
-                                    // Weekend, Holiday, or Weekly Off -> Always 0 Target (Work is bonus)
-                                    dayGrossTarget = 0;
-                                    dayEffectiveTarget = 0;
-                                } else if (isLeave) {
-                                    // It is a specific Leave
-                                    if (mentionsHalfDay || (hasHours && !workedFullDay)) {
-                                        // Half Day Leave -> Target 4h (240m)
-                                        dayGrossTarget = 240;
-                                        dayEffectiveTarget = 240;
-                                    } else {
-                                        // Full Day Leave -> Target 0
-                                        dayGrossTarget = 0;
-                                        dayEffectiveTarget = 0;
-                                    }
-                                } else if (mentionsHalfDay) {
-                                    // Ambiguous Half Day (e.g. WFH - Half Day)
-                                    if (!workedFullDay) {
-                                        // Worked < 6h -> Assume Half Day Leave -> Target 4h
-                                        dayGrossTarget = 240;
-                                        dayEffectiveTarget = 240;
-                                    } else {
-                                        // Worked > 6h -> Full Working Day -> Target 9h / 8h
-                                        dayGrossTarget = 540;
-                                        dayEffectiveTarget = 480;
-                                    }
-                                } else {
-                                    // Regular Day
-                                    if (hasHours) {
-                                        dayGrossTarget = 540;
-                                        dayEffectiveTarget = 480;
-                                    } else {
-                                        // Absent/LWP (No hours, no text) -> Safe to assume Target 0
-                                        dayGrossTarget = 0;
-                                        dayEffectiveTarget = 0;
-                                    }
-                                }
-
-                                targetGrossInRange += dayGrossTarget;
-                                targetEffectiveInRange += dayEffectiveTarget;
-
-                                let gM = 0;
-                                let eM = 0;
-
-                                if (timeMatches && timeMatches.length > 0) {
-                                    const grossStr = timeMatches[timeMatches.length - 1];
-                                    gM = parseDuration(grossStr);
-
-                                    if (timeMatches.length >= 2) {
-                                        eM = parseDuration(timeMatches[0]);
-                                    } else {
-                                        eM = gM;
-                                    }
-
-                                    rangeGross += gM;
-                                    rangeEffective += eM;
-
-                                    // LIVE ADJUSTMENT FOR RANGE: If this row is TODAY, add live session minutes
-                                    const isToday = rowDate.toDateString() === new Date().toDateString();
-                                    if (isToday && window.kekaLastActivePunchIn) {
-                                        const liveMin = Math.max(0, Math.floor((new Date().getTime() - window.kekaLastActivePunchIn.getTime()) / 60000));
-                                        if (liveMin > 0) {
-                                            console.log(`Keka Helper Range: Adding live session +${liveMin}m to Today's row`);
-                                            rangeGross += liveMin;
-                                            rangeEffective += liveMin;
-                                        }
-                                    }
-                                } else {
-                                    // Holiday or absent - no hours to add
-                                }
-                            }
-                        }
-                    });
-
-                    if (!foundAny) {
-                        alert(`No matching dates found for range ${startDate.toLocaleDateString()} - ${endDate.toLocaleDateString()}.\n\nPlease ensure you are viewing the correct month/year in the Attendance Log.`);
-                        resultDiv.style.display = 'none';
-                    } else {
-                        document.getElementById('range-gross-total').innerText = toHm(rangeGross);
-                        document.getElementById('range-effective-total').innerText = toHm(rangeEffective);
-
-                        // Gamification for Range - based on Effective Hours
-                        const targetEffectiveRange = targetEffectiveInRange;
-
-                        const isRangeAhead = (rangeEffective >= targetEffectiveRange);
-                        const isRangeBehind = (rangeEffective < targetEffectiveRange);
-
-                        if (isRangeAhead) {
-                            console.log("Keka Helper: Range Target Met (Effective)! Confetti time.");
-                            triggerConfetti();
-                            playSuccessSound(); // Play cheer
-                        } else if (isRangeBehind) {
-                            console.log("Keka Helper: Range Target Missed (Effective). Sad Emoji time.");
-                            triggerSadEmoji();
-                            playFailureSound(); // Play sad sound
-                        }
-
-                        // Debug log removed to reduce popup height
-                        resultDiv.style.display = 'block';
-                    }
-                } catch (err) {
-                    alert("Error in calculation: " + err.message);
-                    console.error(err);
-                }
+                e.stopPropagation();
+                handleRangeCalc();
             };
         }
 
@@ -927,389 +749,212 @@
         return `keka_stats_${now.getFullYear()}_${now.getMonth()}_${now.getDate()}`;
     }
 
+    function toHm(m) {
+        if (typeof m === 'string') return m;
+        const mins = Math.round(m * 60);
+        return `${Math.floor(mins / 60)}h ${mins % 60}m`;
+    }
+
+    function _updatePanelData(s) {
+        const extractTime = (msg) => msg.includes('Logoff') ? msg.replace('Logoff at ', '') : msg;
+        const grossLogoff = extractTime(s.grossStatusMessage || s.statusMessage);
+        const effectiveLogoff = extractTime(s.statusMessage);
+        const avgNote = s.catchupNote || (s.isClockedIn ? 'Live ⏱' : '');
+
+        const panel = document.getElementById('keka-helper-panel');
+        if (!panel) return; // Panel not built yet
+
+        // Update the cards directly
+        const grossGroup = panel.querySelector('.keka-card-gross');
+        if (grossGroup) {
+            grossGroup.querySelector('.keka-card-outtime').textContent = grossLogoff;
+            const vals = grossGroup.querySelectorAll('.keka-card-meta-val');
+            if (vals.length >= 2) {
+                vals[0].textContent = toHm(s.grossWorked);
+                vals[1].textContent = toHm(s.grossLeft);
+            }
+        }
+
+        const effGroup = panel.querySelector('.keka-card-effective');
+        if (effGroup) {
+            effGroup.querySelector('.keka-card-outtime').textContent = effectiveLogoff;
+            const vals = effGroup.querySelectorAll('.keka-card-meta-val');
+            if (vals.length >= 2) {
+                vals[0].textContent = toHm(s.effectiveWorked);
+                vals[1].textContent = toHm(s.effectiveLeft);
+            }
+        }
+
+        // Update break time
+        const breakVal = panel.querySelector('#keka-break-val');
+        if (breakVal && s.breakMins !== undefined) {
+            breakVal.textContent = toHm(s.breakMins);
+        }
+
+        // Update avg note if present in header
+        const headerNote = panel.querySelector('.keka-panel-header span:nth-child(2)');
+        if (headerNote) {
+            headerNote.textContent = avgNote;
+        } else if (avgNote) {
+            const header = panel.querySelector('.keka-panel-header');
+            if (header) {
+                const span = document.createElement('span');
+                span.style.cssText = "font-size:11px; color:rgba(255,200,80,0.75); font-weight:500;";
+                span.textContent = avgNote;
+                header.appendChild(span);
+            }
+        }
+    }
+
     async function calculate(force = false) {
         if (hasCalculated && !force) return;
+        if (!location.href.includes('/me/attendance/logs')) return;
 
-        // Always reset live session state to ensure we don't hold onto old "MISSING" punches
-        // if the user has officially punched OUT since the last calculation.
-        lastActivePunchIn = null;
-        window.kekaLastActivePunchIn = null;
+        console.log('Keka Helper (V3): Starting calculation...');
 
-        // Only run on attendance log page
-        if (!location.href.includes('/me/attendance/logs')) {
-            console.log("Keka Helper: Not on attendance page, skipping.");
-            return;
-        }
-
-        console.log("Keka Helper: Calculating... Force=" + force);
-
-        // No caching - always calculate fresh from DOM for real-time accuracy
-
-        // Select ALL border-bottom rows, NOT just .on-hover ones.
-        // Holiday/off rows use a different background class and don't get .on-hover,
-        // so the old selector silently skipped them, causing a huge inflated target.
-        const rows = document.querySelectorAll('employee-attendance-list-view .border-bottom');
-        if (rows.length === 0) {
-            console.log("Keka Helper: No attendance rows found. Page may still be loading...");
-            // Retry up to 3 times with increasing delays
-            if (!calculate.retryCount) calculate.retryCount = 0;
-            if (calculate.retryCount < 3) {
-                calculate.retryCount++;
-                const delay = calculate.retryCount * 1000; // 1s, 2s, 3s
-                console.log(`Keka Helper: Retry ${calculate.retryCount}/3 in ${delay}ms...`);
-                setTimeout(() => calculate(force), delay);
-            } else {
-                console.log("Keka Helper: Gave up finding attendance rows after 3 retries.");
-                calculate.retryCount = 0;
-            }
-            return;
-        }
-
-        // Reset retry count on success
-        calculate.retryCount = 0;
-
-        // Variable declarations
-        let totalGross = 0;      // Weekly accumulator (for catchup note)
-        let totalEffective = 0;
-        let todayGross = 0;      // Today only (for OUT time, Worked, Left)
-        let todayEffective = 0;
-        let todayRow = null;
-
-        let targetGross = CONFIG.grossTarget * 60;
-        let targetEffective = CONFIG.effectiveTarget * 60;
-
-        const now = new Date();
-        const monday = getMonday(now);
-        const todayFn = new Date();
-        todayFn.setHours(0, 0, 0, 0);
-
-        // process all rows fresh from the DOM to ensure 100% accuracy
-        let deductedGross = 0;
-        let deductedEffective = 0;
-        // Per-row tracking of what was EXPECTED on past working days.
-        // Holidays / off days contribute 0 to the expected total.
-        let expectedGrossPrev = 0;
-        let expectedEffPrev = 0;
-
-        for (let row of rows) {
-            const spans = Array.from(row.querySelectorAll('span'));
-            // Date Filter
-            const dateSpan = spans.find(s => /^[A-Z][a-z]{2}, \d{2} [A-Z][a-z]{2}$/.test(s.innerText.trim()));
-            if (!dateSpan) continue;
-
-            const dateStr = dateSpan.innerText.trim();
-            const rowDate = new Date(`${dateStr} ${now.getFullYear()}`);
-            rowDate.setHours(0, 0, 0, 0);
-
-            if (rowDate < monday) continue;
-
-            // Deductions
-            const txt = row.innerText.toUpperCase();
-            console.log("Keka Helper Process Row:", { date: dateStr, text: txt });
-
-            const offKeywords = ["HOLIDAY", "HLDY", "WEEKLY OFF", "WEEKLY-OFF", "WO", "FLOATING"];
-            const isOffDay = offKeywords.some(kw => txt.includes(kw) || txt.includes("REST DAY"));
-
-            const leaveKeywords = [
-                "LEAVE", "LWP", "UA", "AB", "CASUAL", "SICK",
-                "PRIVILEGE", "EARNED", "COMP OFF", "COMP-OFF",
-                "MATERNITY", "PATERNITY", "BEREAVEMENT", "MARRIAGE", "UNPAID"
-            ];
-            const isLeave = leaveKeywords.some(kw => txt.includes(kw));
-            const mentionsHalfDay = txt.includes("HALF DAY");
-
-            const hoursMatch = txt.match(/(\d+)h\s+(\d+)m/);
-            let workedMinutes = 0;
-            if (hoursMatch) {
-                workedMinutes = (parseInt(hoursMatch[1]) * 60) + parseInt(hoursMatch[2]);
-            }
-            const hasWorkedHours = workedMinutes > 0;
-            const workedFullDay = workedMinutes > 300;
-
-            let deductGross = 0;
-            let deductEffective = 0;
-
-            if (isOffDay) {
-                deductGross = 540;
-                deductEffective = 480;
-            } else if (isLeave) {
-                if (mentionsHalfDay || (hasWorkedHours && !workedFullDay)) {
-                    deductGross = 300;
-                    deductEffective = 240;
-                } else {
-                    deductGross = 540;
-                    deductEffective = 480;
-                }
-            } else if (mentionsHalfDay && !workedFullDay) {
-                deductGross = 300;
-                deductEffective = 240;
-            }
-
-            targetGross -= deductGross;
-            targetEffective -= deductEffective;
-
-            if (rowDate.getTime() === todayFn.getTime()) {
-                todayRow = row;
-                // update today vars immediately for OUT time
-                const hourSpans = spans.filter(s => /(\d+)h\s+(\d+)m/.test(s.innerText));
-                if (hourSpans.length > 0) {
-                    const grossSpan = hourSpans[hourSpans.length - 1];
-                    todayGross = parseDuration(grossSpan.innerText);
-                    if (hourSpans.length >= 2) {
-                        todayEffective = parseDuration(hourSpans[0].innerText);
-                    } else {
-                        todayEffective = parseDuration(grossSpan.innerText);
-                    }
-                    totalGross += todayGross;
-                    totalEffective += todayEffective;
-                }
-                continue;
-            }
-
-            // previous days only
-            const hourSpans = spans.filter(s => /(\d+)h\s+(\d+)m/.test(s.innerText));
-            if (hourSpans.length > 0) {
-                const grossSpan = hourSpans[hourSpans.length - 1];
-                totalGross += parseDuration(grossSpan.innerText);
-
-                if (hourSpans.length >= 2) {
-                    const effSpan = hourSpans[0];
-                    totalEffective += parseDuration(effSpan.innerText);
-                } else {
-                    totalEffective += parseDuration(grossSpan.innerText);
-                }
-            }
-
-            // Track what today TARGET was for this past day
-            // Off days / holidays: 0 expected. Half-day leave: 300/240. Full day: 540/480.
-            if (isOffDay) {
-                // holiday or weekly off — 0 expected
-            } else if (isLeave) {
-                if (mentionsHalfDay || (hasWorkedHours && !workedFullDay)) {
-                    expectedGrossPrev += 300;
-                    expectedEffPrev += 240;
-                }
-                // full day leave: 0 expected (already off)
-            } else if (mentionsHalfDay && !workedFullDay) {
-                expectedGrossPrev += 300;
-                expectedEffPrev += 240;
-            } else {
-                // Normal working day
-                expectedGrossPrev += 540;
-                expectedEffPrev += 480;
-            }
-        }
-
-        if (targetGross < 0) targetGross = 0;
-        if (targetEffective < 0) targetEffective = 0;
-
-        // Today's remaining (for OUT time and Left display)
-        const todayGrossTarget = targetGross - (totalGross - todayGross); // what today needs to contribute
-        const remainGross = Math.max(0, 540 - todayGross);    // simple: 9h - today's gross
-        const remainEffective = Math.max(0, 480 - todayEffective); // 8h - today's effective
-
-        // Weekly remaining (for catching up note)
-        const weeklyRemainGross = targetGross - totalGross;
-        const weeklyRemainEffective = targetEffective - totalEffective;
-
-        let loginTime = null;
-        // lastActivePunchIn is declared and reset at the top of the function
-
-        if (todayRow) {
-            // Inject hidden style — also moves element off-screen so it never visually renders
-            const hideDropStyle = document.createElement('style');
-            hideDropStyle.textContent = '.dropdown-menu-logs { visibility: hidden !important; opacity: 0 !important; pointer-events: none !important; position: fixed !important; top: -9999px !important; left: -9999px !important; }';
-            document.head.appendChild(hideDropStyle);
-
-            // Wait 80ms for the browser to actually apply the CSS before clicking
-            await new Promise(r => setTimeout(r, 80));
-
-            todayRow.click();
-
-            for (let i = 0; i < 14; i++) {
-                await new Promise(r => setTimeout(r, 250));
-                // Keka attaches dropdowns to the body dynamically. 
-                // Therefore, the most recently clicked row's dropdown is always the last one in the DOM.
-                const allDropdowns = document.querySelectorAll('.dropdown-menu-logs');
-                const dropdown = allDropdowns.length > 0 ? allDropdowns[allDropdowns.length - 1] : null;
-
-                if (dropdown) {
-                    // Use textContent (works on hidden/off-screen elements, unlike innerText)
-                    const txt = dropdown.textContent || '';
-                    const matches = txt.match(/(\d{1,2}:\d{2}:\d{2}(?:\s?[AP]M)?)/g);
-                    if (matches && matches.length > 0) {
-                        const firstTime = matches[0];
-                        if (!firstTime.startsWith("0:00") && !firstTime.startsWith("00:00")) {
-                            loginTime = parseTime(firstTime);
-                        }
-
-                        // Find latest IN punch that has a MISSING out
-                        // Pattern: a time followed (with any chars in between) by the word MISSING
-                        const activePunches = [...txt.matchAll(/(\d{1,2}:\d{2}:\d{2}(?:\s?[AP]M)?)[^\d\n]{0,30}MISSING/gi)];
-                        let maxTime = null;
-                        let maxVal = -1;
-
-                        for (const punchMatch of activePunches) {
-                            const pTime = parseTime(punchMatch[1]);
-                            if (pTime) {
-                                const pVal = pTime.getTime();
-                                if (pVal > maxVal) {
-                                    maxVal = pVal;
-                                    maxTime = pTime;
-                                }
-                            }
-                        }
-                        if (maxTime) {
-                            lastActivePunchIn = maxTime;
-                            window.kekaLastActivePunchIn = maxTime; // Store globally for range calculator
-                        }
-
-                        if (loginTime) break;
-                    }
-                }
-            }
-
-            // Close dropdown and remove the hidden style
-            todayRow.click();
-            await new Promise(r => setTimeout(r, 150));
-            hideDropStyle.remove();
-        }
-
-        // Initialize fallback values
-        let logoffGrossStr = "--:--";
-        let logoffEffectiveStr = "--:--";
-        let leftGross = 0;
-        let leftEffective = 0;
-        let catchupGross = 0;
-        let catchupEffective = 0;
-        let avgNote = "";
-
-        if (loginTime || lastActivePunchIn) {
-            const todayIndex = now.getDay();
-
-            // HOLIDAY-AWARE WEEKLY CATCHUP FORMULA
-            // expectedGrossPrev / expectedEffPrev are built per-row in the loop above:
-            //   - Normal working day: +540 gross / +480 effective
-            //   - Holiday / off day:  +0 (correctly excluded!)
-            //   - Half-day leave:     +300 / +240
-            //   - Full-day leave:     +0
-            const prevDaysGross = totalGross - todayGross;
-            const prevDaysEffective = totalEffective - todayEffective;
-
-            // Positive = behind (need to catch up), Negative = ahead (can leave early)
-            const catchupGross = expectedGrossPrev - prevDaysGross;
-            const catchupEffective = expectedEffPrev - prevDaysEffective;
-
-            // Today's target adjusted for weekly catchup
-            const todayGrossTarget = Math.max(0, 540 + catchupGross);
-            const todayEffTarget = Math.max(0, 480 + catchupEffective);
-
-            console.log(`Keka Helper Catchup: expectedGrossPrev=${expectedGrossPrev}m prevWorked=${prevDaysGross}m catchupGross=${catchupGross}m todayTarget=${todayGrossTarget}m`);
-
-            // LIVE ADJUSTMENT: add in-progress session time not yet counted by Keka
-            let liveMinutes = 0;
-            if (lastActivePunchIn) {
-                liveMinutes = Math.max(0, Math.floor((now.getTime() - lastActivePunchIn.getTime()) / 60000));
-                console.log(`Keka Helper: Live session +${liveMinutes}m since ${formatTime(lastActivePunchIn)}`);
-            }
-            const todayGrossLive = todayGross + liveMinutes;
-            const todayEffectiveLive = todayEffective + liveMinutes;
-
-            // LEFT: how many minutes remain (using live-adjusted worked hours)
-            leftGross = Math.max(0, todayGrossTarget - todayGrossLive);
-            leftEffective = Math.max(0, todayEffTarget - todayEffectiveLive);
-
-            // OUT TIME: NOW + remaining
-            const outTimeGross = new Date(now.getTime() + leftGross * 60000);
-            const outTimeEffective = new Date(now.getTime() + leftEffective * 60000);
-
-            logoffGrossStr = todayGrossLive >= todayGrossTarget
-                ? "GOAL MET! 🎉"
-                : formatTime(outTimeGross);
-
-            if (todayEffectiveLive >= todayEffTarget) {
-                logoffEffectiveStr = "GOAL MET! 🎉";
-                if (!window.kekaCheerPlayed) { playSuccessSound(); window.kekaCheerPlayed = true; }
-            } else if (todayIndex === 0 || todayIndex === 6) {
-                logoffEffectiveStr = "Week Over 😭";
-                if (!window.kekaSadPlayed) { playFailureSound(); window.kekaSadPlayed = true; }
-            } else {
-                logoffEffectiveStr = formatTime(outTimeEffective);
-            }
-
-            // Status note
-            if (catchupGross > 0 || catchupEffective > 0) {
-                avgNote = `<span style="font-size:10px; opacity:0.7; font-weight:400; margin-left:4px;">(Catching up)</span>`;
-            } else if (catchupGross < -60 || catchupEffective < -60) {
-                avgNote = `<span style="font-size:10px; opacity:0.7; font-weight:400; margin-left:4px;">(Ahead 🎯)</span>`;
-            } else if (liveMinutes > 0) {
-                avgNote = `<span style="font-size:10px; opacity:0.7; font-weight:400; margin-left:4px;">(Live ⏱)</span>`;
-            }
-
-            // Confetti / Sad animations
-            const todayGoalMet = leftEffective === 0;
-            const weekIsOver = todayIndex === 0 || todayIndex === 6;
-            const weekGoalMissed = weeklyRemainEffective > 0;
-
-            if (!window.kekaEmojiShown) {
-                window.kekaEmojiShown = true;
-                if (todayGoalMet) {
-                    console.log("Keka Helper: Today's goal met! Confetti.");
-                    triggerConfetti();
-                } else if (weekIsOver && weekGoalMissed) {
-                    console.log("Keka Helper: Week over, goal not met. Sad Emoji.");
-                    triggerSadEmoji();
-                }
-            }
-        } else {
-            console.log("Keka Helper: Login time not found (Pending approval?), showing limited banner.");
-            logoffGrossStr = "--:--";
-            logoffEffectiveStr = "--:--";
-            avgNote = `<span style="font-size:10px; opacity:0.7; font-weight:400; margin-left:4px;">(Pending?)</span>`;
-        }
-
-        // Always calculate "Worked" totals to show in the panel even if loginTime is missing
-        let liveMin = 0;
-        if (lastActivePunchIn) {
-            liveMin = Math.max(0, Math.floor((now.getTime() - lastActivePunchIn.getTime()) / 60000));
-        }
-
-        const dataToCache = {
-            grossLogoff: logoffGrossStr,
-            effectiveLogoff: logoffEffectiveStr,
-            grossLeft: toHm(leftGross),
-            effectiveLeft: toHm(leftEffective),
-            grossWorked: toHm(todayGross + liveMin),
-            effectiveWorked: toHm(todayEffective + liveMin),
-            avgNote: avgNote
-        };
-
-        createBanner(
-            dataToCache.grossLogoff,
-            dataToCache.effectiveLogoff,
-            dataToCache.grossLeft,
-            dataToCache.effectiveLeft,
-            dataToCache.grossWorked,
-            dataToCache.effectiveWorked,
-            dataToCache.avgNote
-        );
-
-        // Send calculated status to the background worker for notifications
+        // Guard against extension context invalidation
         try {
-            chrome.runtime.sendMessage({
-                action: 'UPDATE_KEKA_STATUS',
-                data: {
-                    effectiveLogoffStr: dataToCache.effectiveLogoff,
-                    isGoalMet: dataToCache.effectiveLogoff.includes("GOAL MET"),
-                    isWeekOver: dataToCache.effectiveLogoff.includes("Week Over")
+            if (!chrome.runtime || !chrome.runtime.id) {
+                console.warn('Keka Helper: Extension context invalidated. Requires page reload.');
+                return;
+            }
+        } catch (e) {
+            console.warn('Keka Helper: Extension context invalidated. Requires page reload.', e);
+            return;
+        }
+
+        // If panel doesn't exist at all yet, build it once
+        const iconExists = !!document.getElementById('keka-helper-icon');
+        if (!iconExists) {
+            createBanner('--:--', '--:--', '--:--', '--:--', '--:--', '--:--', 'Loading...', '--:--');
+        }
+
+        const action = force ? 'REFRESH_DATA' : 'GET_TODAY_STATS';
+
+        try {
+            chrome.runtime.sendMessage({ action }, (response) => {
+                if (chrome.runtime.lastError || !response || !response.success) {
+                    const errStr = (chrome.runtime.lastError?.message || response?.error || 'Unknown Error').toString();
+                    console.error('Keka Helper: Failed to get today stats:', errStr);
+
+                    const isAuthError = errStr.includes('401');
+                    const isFetchError = errStr.includes('Failed to fetch');
+
+                    let displayErr = 'API Error';
+                    let detailErr = 'Check console';
+
+                    if (isAuthError) {
+                        displayErr = 'Login Expired';
+                        detailErr = 'Please refresh this page';
+                    } else if (isFetchError) {
+                        displayErr = 'Network Error';
+                        detailErr = 'Check connection';
+                    }
+
+                    if (!iconExists) {
+                        createBanner(displayErr, displayErr, '--:--', '--:--', '--:--', '--:--', detailErr, '--:--');
+                    } else {
+                        _updatePanelData({
+                            grossStatusMessage: displayErr,
+                            statusMessage: displayErr,
+                            grossLeft: '--:--',
+                            effectiveLeft: '--:--',
+                            grossWorked: '--:--',
+                            effectiveWorked: '--:--',
+                            catchupNote: detailErr,
+                            breakMins: '--:--'
+                        });
+                    }
+                    return;
                 }
-            }, response => {
+
+                const s = response.stats;
+
+                if (!iconExists) {
+                    // First build
+                    const extractTime = (msg) => msg.includes('Logoff') ? msg.replace('Logoff at ', '') : msg;
+                    createBanner(
+                        extractTime(s.grossStatusMessage || s.statusMessage),
+                        extractTime(s.statusMessage),
+                        toHm(s.grossLeft),
+                        toHm(s.effectiveLeft),
+                        toHm(s.grossWorked),
+                        toHm(s.effectiveWorked),
+                        s.catchupNote || (s.isClockedIn ? 'Live ⏱' : ''),
+                        toHm(s.breakMins)
+                    );
+                } else {
+                    // In-place update
+                    _updatePanelData(s);
+                }
+
+                if (s.statusMessage.includes('GOAL MET') && !window.kekaCheerPlayed) {
+                    playSuccessSound();
+                    triggerConfetti();
+                    window.kekaCheerPlayed = true;
+                }
+
+                hasCalculated = true;
+            });
+        } catch (e) {
+            console.warn('Keka Helper: Extension context invalidated during fetch.', e);
+        }
+    }
+
+    // Simplified Range Calculation Handler for the UI
+    function handleRangeCalc() {
+        const start = document.getElementById('keka-start-date').value;
+        const end = document.getElementById('keka-end-date').value;
+        const resultDiv = document.getElementById('keka-range-result');
+
+        if (!start || !end) return alert('Select dates');
+
+        resultDiv.style.display = 'block';
+        const grossEl = document.getElementById('range-gross-total');
+        const effEl = document.getElementById('range-effective-total');
+        grossEl.innerText = 'Calculating...';
+        effEl.innerText = 'Calculating...';
+
+        // Guard: bail early if extension context is gone
+        try { if (!chrome.runtime || !chrome.runtime.id) throw new Error(); } catch (e) {
+            grossEl.innerText = 'Reload page'; effEl.innerText = 'Reload page'; return;
+        }
+
+        // Timeout so it never stays stuck forever
+        const timeout = setTimeout(() => {
+            if (grossEl.innerText === 'Calculating...') {
+                grossEl.innerText = 'Timed out — reload page';
+                effEl.innerText = 'Timed out — reload page';
+            }
+        }, 30000);
+
+        try {
+            chrome.runtime.sendMessage({ action: 'GET_RANGE_STATS', startDate: start, endDate: end }, (response) => {
+                clearTimeout(timeout);
                 if (chrome.runtime.lastError) {
-                    console.log("Keka Helper Background Worker not ready yet.");
+                    console.error('Keka Range lastError:', chrome.runtime.lastError.message);
+                    grossEl.innerText = 'Error — reload page';
+                    effEl.innerText = 'Error — reload page';
+                    return;
+                }
+                if (response && response.success) {
+                    grossEl.innerText = toHm(response.stats.totalGross);
+                    effEl.innerText = toHm(response.stats.totalEffective);
+                    if (response.stats.totalEffective > 0) {
+                        playSuccessSound();
+                        triggerConfetti();
+                    }
+                } else {
+                    const err = response?.error || 'Unknown error';
+                    grossEl.innerText = `Error: ${err}`;
+                    effEl.innerText = `Error: ${err}`;
+                    console.error('Keka Range failed:', err);
                 }
             });
         } catch (e) {
-            console.log("Keka Helper message error:", e);
+            clearTimeout(timeout);
+            grossEl.innerText = 'Reload extension';
+            effEl.innerText = 'Reload extension';
         }
     }
 
@@ -1446,10 +1091,20 @@
         calculate();
 
         // Auto-refresh every 60 seconds to keep live "Left" and "OUT" times accurate
-        setInterval(() => {
+        const refreshInterval = setInterval(() => {
             if (location.href.includes('/me/attendance/logs')) {
-                console.log("Keka Helper: Auto-refreshing calculation...");
-                calculate(true);
+                try {
+                    if (!chrome.runtime || !chrome.runtime.id) {
+                        console.warn("Keka Helper: Extension unloaded. Stopping auto-refresh.");
+                        clearInterval(refreshInterval);
+                        return;
+                    }
+                    console.log("Keka Helper: Auto-refreshing calculation...");
+                    calculate(true);
+                } catch (e) {
+                    console.warn("Keka Helper: Extension unloaded. Stopping auto-refresh.", e);
+                    clearInterval(refreshInterval);
+                }
             }
         }, 60000);
     }

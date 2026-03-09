@@ -1,9 +1,12 @@
 let kekaAuthToken = null;
+const attendanceCache = new Map();
 
+// Initialize token from storage
 chrome.storage.local.get(['kekaAuthToken'], (result) => {
     if (result.kekaAuthToken) kekaAuthToken = result.kekaAuthToken;
 });
 
+// Intercept Auth Token
 chrome.webRequest.onSendHeaders.addListener(
     function (details) {
         for (let header of details.requestHeaders) {
@@ -11,7 +14,9 @@ chrome.webRequest.onSendHeaders.addListener(
                 if (header.value !== kekaAuthToken) {
                     kekaAuthToken = header.value;
                     chrome.storage.local.set({ kekaAuthToken: header.value });
-                    console.log("Keka Helper: Intercepted new Auth Token!");
+                    console.log("Keka Helper (V3): Intercepted new Auth Token!");
+                    // Clear cache on token change just in case
+                    attendanceCache.clear();
                 }
                 break;
             }
@@ -21,18 +26,12 @@ chrome.webRequest.onSendHeaders.addListener(
     ["requestHeaders"]
 );
 
+// --- ALARM LOGIC ---
 chrome.runtime.onInstalled.addListener(() => {
-    // Default to 30 minutes if not set
     chrome.storage.local.get(['kekaNotifyInterval', 'kekaNotifyEnabled'], (data) => {
-        if (data.kekaNotifyEnabled === undefined) {
-            chrome.storage.local.set({ kekaNotifyEnabled: true });
-        }
-        if (!data.kekaNotifyInterval) {
-            chrome.storage.local.set({ kekaNotifyInterval: 30 });
-            setupAlarm(30);
-        } else {
-            setupAlarm(data.kekaNotifyInterval);
-        }
+        if (data.kekaNotifyEnabled === undefined) chrome.storage.local.set({ kekaNotifyEnabled: true });
+        const interval = data.kekaNotifyInterval || 30;
+        setupAlarm(data.kekaNotifyEnabled !== false ? interval : 0);
     });
 });
 
@@ -41,295 +40,290 @@ function setupAlarm(minutes) {
         if (minutes > 0) {
             chrome.alarms.create('kekaNotifier', { periodInMinutes: parseInt(minutes) });
             console.log(`Keka Helper: Alarm set for every ${minutes} minutes.`);
-        } else {
-            console.log(`Keka Helper: Notifications disabled.`);
         }
     });
 }
 
-// Listen for updates from settings panel
 chrome.storage.onChanged.addListener((changes, namespace) => {
-    if (namespace === 'local') {
-        if (changes.kekaNotifyInterval || changes.kekaNotifyEnabled) {
-            chrome.storage.local.get(['kekaNotifyInterval', 'kekaNotifyEnabled'], (data) => {
-                if (data.kekaNotifyEnabled && data.kekaNotifyInterval) {
-                    setupAlarm(data.kekaNotifyInterval);
-                } else {
-                    setupAlarm(0); // Clear alarm
-                }
-            });
-        }
+    if (namespace === 'local' && (changes.kekaNotifyInterval || changes.kekaNotifyEnabled)) {
+        chrome.storage.local.get(['kekaNotifyInterval', 'kekaNotifyEnabled'], (data) => {
+            setupAlarm(data.kekaNotifyEnabled && data.kekaNotifyInterval ? data.kekaNotifyInterval : 0);
+        });
     }
 });
 
-// Helper to get Monday of the current week (matching Keka's start)
+// Keka API returns ALL attendance data regardless of month/year params.
+// So we just fetch once and cache the entire dataset.
+let allAttendanceCache = null;
+let allAttendanceCacheTime = 0;
+const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
+async function fetchAllAttendance(forceRefresh = false) {
+    if (!kekaAuthToken) throw new Error('No Auth Token — visit Keka to capture it');
+
+    const now = Date.now();
+    if (!forceRefresh && allAttendanceCache && (now - allAttendanceCacheTime) < CACHE_TTL_MS) {
+        return allAttendanceCache;
+    }
+
+    // Month/year params are ignored by Keka; we just need a valid request
+    const d = new Date();
+    const url = `https://marutitech.keka.com/k/attendance/api/mytime/attendance/summary?month=${d.getMonth() + 1}&year=${d.getFullYear()}`;
+
+    try {
+        const response = await fetch(url, {
+            headers: { 'Authorization': kekaAuthToken, 'Accept': 'application/json' }
+        });
+        if (!response.ok) throw new Error(`API Error: ${response.status}`);
+        const json = await response.json();
+        allAttendanceCache = json;
+        allAttendanceCacheTime = now;
+        console.log(`Keka Helper: Fetched ${json.data?.length || 0} attendance records`);
+        return json;
+    } catch (e) {
+        console.error('Keka Helper: Fetch failed:', e);
+        throw e;
+    }
+}
+
+// Helper: returns "YYYY-MM-DD" in LOCAL timezone (avoids UTC shift for IST users)
+function toLocalDateStr(d) {
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+// Helper to get Monday of the current week
 function getMonday(d) {
     d = new Date(d);
-    var day = d.getDay(),
-        diff = d.getDate() - day + (day == 0 ? -6 : 1);
+    const day = d.getDay();
+    const diff = d.getDate() - day + (day === 0 ? -6 : 1);
     d.setDate(diff);
     d.setHours(0, 0, 0, 0);
     return d;
 }
 
-// Format minutes to HH:MM a
-function formatLogoffTime(dateObj) {
-    let hours = dateObj.getHours();
-    let minutes = dateObj.getMinutes();
-    const ampm = hours >= 12 ? 'PM' : 'AM';
-    hours = hours % 12;
-    hours = hours ? hours : 12; // the hour '0' should be '12'
-    minutes = minutes < 10 ? '0' + minutes : minutes;
-    return hours + ':' + minutes + ' ' + ampm;
+function calculateTodayStats(allData, graceEnabled = false) {
+    const now = new Date();
+    const todayStr = toLocalDateStr(now);
+    const mondayStr = toLocalDateStr(getMonday(now));
+
+    let weeklyEffective = 0;
+    let todayEffective = 0;
+    let todayGross = 0;
+    let expectedEffPrev = 0;  // expected effective for past days
+    let expectedGrossPrev = 0; // expected gross for past days (9h per working day)
+    let prevGrossWorked = 0;  // actual gross worked on past days
+    let isClockedIn = false;
+    let lastInTime = null;
+    let statusMessage = '';
+    let isOffDayToday = false;
+
+    if (!allData || !allData.data) return null;
+
+    for (const day of allData.data) {
+        const dStr = (day.attendanceDate || '').slice(0, 10);
+        if (dStr < mondayStr) continue;
+
+        const isOffDay = day.dayType === 1 || day.dayType === 2;
+        const isLeave = (day.leaveDetails && day.leaveDetails.length > 0)
+            || (day.leaveDayStatuses && day.leaveDayStatuses.length > 0);
+        const effMins = Math.round((day.totalEffectiveHours || 0) * 60);
+        const grossMins = Math.round((day.totalGrossHours || 0) * 60);
+
+        if (dStr === todayStr) {
+            todayGross = grossMins;
+            isOffDayToday = isOffDay || isLeave;
+
+            if (day.lastLogOfTheDay) {
+                const lastLog = new Date(day.lastLogOfTheDay);
+                const lastOutRaw = day.lastOutOfTheDay;
+                const lastOut = lastOutRaw ? new Date(lastOutRaw) : null;
+                const isMissing = !lastOut || isNaN(lastOut.getTime())
+                    || lastOut.getFullYear() < 2000
+                    || lastLog.getTime() > lastOut.getTime();
+                if (isMissing) { isClockedIn = true; lastInTime = lastLog; }
+            }
+
+            todayEffective = effMins > 0 ? effMins : (isClockedIn ? grossMins : 0);
+            weeklyEffective += todayEffective;
+            console.log(`Keka Today: ${dStr} gross=${grossMins}m eff=${effMins}m clockedIn=${isClockedIn}`);
+
+        } else if (dStr < todayStr) {
+            // Past days this week
+            const pastEff = effMins > 0 ? effMins : grossMins;
+            weeklyEffective += pastEff;
+
+            if (!isOffDay && !isLeave) {
+                expectedEffPrev += 480;           // 8h effective expected
+                expectedGrossPrev += 540;           // 9h gross expected
+                prevGrossWorked += grossMins;     // actual gross worked
+            } else if (isLeave && day.attendanceDayStatus === 2) {
+                expectedEffPrev += 240;           // half-day leave
+                expectedGrossPrev += 270;           // half-day gross expected
+                prevGrossWorked += grossMins;
+            }
+        }
+    }
+
+    // Effective catchup
+    const prevEffWorked = weeklyEffective - todayEffective;
+    let effCatchup = expectedEffPrev - prevEffWorked;   // negative = ahead
+
+    // Apply 14 min grace if enabled (weekly)
+    if (graceEnabled) {
+        effCatchup -= 14;
+    }
+
+    const todayTarget = Math.max(0, 480 + effCatchup);
+
+    // Gross catchup (independent from effective)
+    const grossCatchup = expectedGrossPrev - prevGrossWorked; // negative = ahead on gross
+    const grossTarget = Math.max(0, 540 + grossCatchup);    // today's gross target (can be 0 if very far ahead)
+
+    let liveMinutes = 0;
+    if (isClockedIn && lastInTime) {
+        liveMinutes = Math.max(0, Math.floor((now.getTime() - lastInTime.getTime()) / 60000));
+    }
+    const todayWorked = todayEffective + liveMinutes;
+    const needed = Math.max(0, todayTarget - todayWorked);
+    const grossNeeded = Math.max(0, grossTarget - todayGross - liveMinutes);
+
+    console.log(`Keka: effCatchup=${effCatchup}m grossCatchup=${grossCatchup}m | eff target=${todayTarget}m needed=${needed}m | gross target=${grossTarget}m needed=${grossNeeded}m`);
+
+    // Effective status message
+    if (isOffDayToday && todayWorked === 0 && !isClockedIn) {
+        statusMessage = 'On Leave / Day Off! 🎉';
+    } else if (todayWorked === 0 && !isClockedIn) {
+        statusMessage = 'Yet to Start ⏳';
+    } else if (needed <= 0) {
+        statusMessage = 'GOAL MET! 🎉';
+    } else {
+        const logoff = new Date(now.getTime() + needed * 60000);
+        statusMessage = `Logoff at ${logoff.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+    }
+
+    // Gross status message (separate, catchup-adjusted)
+    let grossStatusMessage;
+    if (isOffDayToday && todayGross === 0 && !isClockedIn) {
+        grossStatusMessage = 'On Leave / Day Off! 🎉';
+    } else if (todayGross === 0 && liveMinutes === 0 && !isClockedIn) {
+        grossStatusMessage = 'Yet to Start ⏳';
+    } else if (grossNeeded <= 0) {
+        grossStatusMessage = 'GOAL MET! 🎉';
+    } else {
+        const gLogoff = new Date(now.getTime() + grossNeeded * 60000);
+        grossStatusMessage = `Logoff at ${gLogoff.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+    }
+
+    const catchupNote = effCatchup > 60 ? 'Catching up' : effCatchup < -60 ? 'Ahead 🎯' : isClockedIn ? 'Live ⏱' : '';
+
+    // Final overrides for "Left" time when strictly off
+    const finalEffectiveLeft = (isOffDayToday && todayWorked === 0 && !isClockedIn) ? 0 : (needed / 60);
+    const finalGrossLeft = (isOffDayToday && todayGross === 0 && !isClockedIn) ? 0 : (grossNeeded / 60);
+
+    // Calculate Break Time (Gross - Effective)
+    const breakMins = Math.max(0, (todayGross + liveMinutes) - todayWorked);
+
+    return {
+        grossWorked: (todayGross + liveMinutes) / 60,
+        effectiveWorked: todayWorked / 60,
+        breakMins: breakMins / 60,
+        grossLeft: finalGrossLeft,
+        effectiveLeft: finalEffectiveLeft,
+        statusMessage,        // effective logoff
+        grossStatusMessage,   // gross logoff (catchup-adjusted)
+        neededMins: finalEffectiveLeft * 60,
+        isClockedIn,
+        catchupNote
+    };
 }
 
-// Core V2 Engine: Background API Fetching
-async function fetchKekaData() {
-    if (!kekaAuthToken) {
-        console.warn("Keka Helper (V2): No Auth Token yet. Cannot fetch data.");
-        return;
+async function calculateRangeStats(startStr, endStr) {
+    // Single fetch — Keka returns ALL data regardless of month param
+    const allData = await fetchAllAttendance();
+    let totalGross = 0;
+    let totalEffective = 0;
+
+    for (const day of allData.data) {
+        const dStr = (day.attendanceDate || '').slice(0, 10);
+        if (dStr >= startStr && dStr <= endStr) {
+            totalGross += (day.totalGrossHours || 0);
+            totalEffective += (day.totalEffectiveHours || 0);
+        }
     }
 
-    try {
-        const response = await fetch("https://marutitech.keka.com/k/attendance/api/mytime/attendance/summary", {
-            headers: {
-                "Authorization": kekaAuthToken,
-                "Accept": "application/json"
-            }
-        });
-
-        if (!response.ok) {
-            console.error("Keka Helper (V2): API return error:", response.status);
-            return;
-        }
-
-        const json = await response.json();
-
-        // --- DEBUG API DUMP ---
-        chrome.storage.local.set({ kekaDebugApiDump: json });
-        console.log("Keka Helper (V2): Dumped raw API payload to storage.");
-        // ----------------------
-
-        let targetEffective = 40 * 60;
-
-        let totalEffective = 0;
-        let todayEffective = 0;
-        let isClockedIn = false;
-        let lastInTime = null;
-        // Per-row tracking of EXPECTED effective hours from past days.
-        // Holidays and off days contribute 0; normal working days contribute 480.
-        let expectedEffPrev = 0;
-
-        const now = new Date();
-        const monday = getMonday(now);
-        const todayFn = new Date();
-        todayFn.setHours(0, 0, 0, 0);
-
-        // Parse API Response Array
-        if (json && json.data && Array.isArray(json.data)) {
-            for (let dayData of json.data) {
-                const dayDate = new Date(dayData.attendanceDate);
-                // Ensure the date is strictly midnight for comparison
-                dayDate.setHours(0, 0, 0, 0);
-
-                if (dayDate < monday) continue; // Only process this week
-
-                // Deductions Logic
-                const isOffDay = dayData.dayType === 1 || dayData.dayType === 2;
-
-                let isLeave = false;
-                let mentionsHalfDay = false;
-
-                // 1. Check leaveDayStatuses
-                if (dayData.leaveDayStatuses && dayData.leaveDayStatuses.length > 0) {
-                    if (dayData.leaveDayStatuses.every(status => status === 1)) {
-                        isLeave = true; // 1 represents a full day leave approval
-                    } else {
-                        // If it's something else, it might be a half day, we'll check duration
-                        isLeave = true;
-                    }
-                }
-
-                // 2. Fallback check for leaveDetails array (Comp Offs / Casual Leaves)
-                if (dayData.leaveDetails && dayData.leaveDetails.length > 0) {
-                    isLeave = true;
-                }
-
-                const effectiveMinutes = Math.floor((dayData.totalEffectiveHours || 0) * 60);
-                const hasWorkedHours = effectiveMinutes > 0;
-                // Keka uses 4 hours (240 mins) half day rule for effective
-                const workedFullDay = effectiveMinutes > 240;
-
-                // We only deduct the target on leaves, not plain off days which are naturally 0h
-                if (isLeave) {
-                    if (mentionsHalfDay || (hasWorkedHours && !workedFullDay)) {
-                        targetEffective -= 240; // Deduct 4h for half day
-                    } else if (!isOffDay) {
-                        targetEffective -= 480; // Deduct 8h for full leave
-                    }
-                } else if (mentionsHalfDay && !workedFullDay) {
-                    targetEffective -= 240;
-                }
-
-                // Sum up hours
-                totalEffective += effectiveMinutes;
-
-                // Track expected hours for PAST days (not today)
-                if (dayDate.getTime() !== todayFn.getTime()) {
-                    if (isOffDay) {
-                        // holiday / weekly off → 0 expected
-                    } else if (isLeave) {
-                        if (mentionsHalfDay || (hasWorkedHours && !workedFullDay)) {
-                            expectedEffPrev += 240; // half day leave
-                        }
-                        // full day leave → 0 expected
-                    } else if (mentionsHalfDay && !workedFullDay) {
-                        expectedEffPrev += 240;
-                    } else {
-                        expectedEffPrev += 480; // normal working day
-                    }
-                }
-
-                // Handle "Today" logic specifically
-                if (dayDate.getTime() === todayFn.getTime()) {
-                    todayEffective = effectiveMinutes;
-
-                    // Look at Keka's explicit punch metrics rather than validInOutPairs 
-                    // (since the array only contains completely closed pairs)
-                    if (dayData.lastLogOfTheDay) {
-                        const lastLog = new Date(dayData.lastLogOfTheDay);
-                        const lastOut = dayData.lastOutOfTheDay ? new Date(dayData.lastOutOfTheDay) : null;
-
-                        // If there is no out punch, or the last out punch is older than the last log, we are clocked IN
-                        const isMissingOutFallback = !lastOut || isNaN(lastOut.getTime()) || (lastLog.getTime() > lastOut.getTime()) || dayData.lastOutOfTheDay.includes("0001");
-
-                        if (isMissingOutFallback) {
-                            isClockedIn = true;
-                            lastInTime = lastLog;
-                        }
-                    }
-                }
-            }
-        }
-
-        if (targetEffective < 0) targetEffective = 0;
-
-        // Calculate the Final Target using strict Daily Math (no cross-day deficit roll-over, matching typical Keka UI)
-        let isTodayLeaveOrOff = false;
-
-        if (json && json.data && Array.isArray(json.data)) {
-            for (let dayData of json.data) {
-                const dayDate = new Date(dayData.attendanceDate);
-                dayDate.setHours(0, 0, 0, 0);
-                if (dayDate.getTime() === todayFn.getTime()) {
-                    // Check if it's off or leave
-                    let isLve = false;
-                    if (dayData.leaveDayStatuses && dayData.leaveDayStatuses.length > 0) isLve = true;
-                    if (dayData.leaveDetails && dayData.leaveDetails.length > 0) isLve = true;
-
-                    const dayTypeDesc = (dayData.dayType === 0) ? true : false; // 0 usually means weekend/weekly off
-
-                    if (isLve || dayTypeDesc) {
-                        isTodayLeaveOrOff = true;
-                    }
-                }
-            }
-        }
-
-        let message = "";
-
-        if (isTodayLeaveOrOff && todayEffective === 0 && !isClockedIn) {
-            message = "On Leave / Day Off! 🎉";
-            chrome.notifications.create('keka-notify-v2-' + Date.now(), {
-                type: 'basic',
-                iconUrl: 'icon.png',
-                title: 'Keka Target (Background API)',
-                message: message
-            });
-            return;
-        }
-
-        if (todayEffective === 0 && !isClockedIn) {
-            message = "Yet to Start ⏳";
-            chrome.notifications.create('keka-notify-v2-' + Date.now(), {
-                type: 'basic',
-                iconUrl: 'icon.png',
-                title: 'Keka Target (Background API)',
-                message: message
-            });
-            return;
-        }
-
-        // HOLIDAY-AWARE WEEKLY CATCHUP TARGET
-        // expectedEffPrev is 0 for holidays, 480 for working days, 240 for half-day leaves.
-        const prevDaysEffective = totalEffective - todayEffective;
-        const catchupEffective = expectedEffPrev - prevDaysEffective; // positive = behind, negative = ahead
-        const todayEffTarget = Math.max(0, 480 + catchupEffective);
-        const leftEffective = Math.max(0, todayEffTarget - todayEffective);
-
-        console.log(`Keka BG Catchup: expectedEffPrev=${expectedEffPrev}m prevWorked=${prevDaysEffective}m catchup=${catchupEffective}m todayTarget=${todayEffTarget}m`);
-
-        let logoffDateObj = null;
-
-        if (totalEffective >= targetEffective || leftEffective <= 0) {
-            message = "GOAL MET! 🎉";
-        } else {
-            const anchorTime = (isClockedIn && lastInTime) ? lastInTime.getTime() : now.getTime();
-            logoffDateObj = new Date(anchorTime + (leftEffective * 60000));
-
-            if (logoffDateObj < now && isClockedIn) {
-                message = "GOAL MET! 🎉";
-            } else {
-                message = `Logoff at ${formatLogoffTime(logoffDateObj)}`;
-            }
-        }
-
-        // --- Execute Notification ---
-        const notifId = 'keka-notify-v2-' + Date.now();
-        chrome.notifications.create(notifId, {
-            type: 'basic',
-            iconUrl: 'icon.png',
-            title: 'Keka Target (Background API)',
-            message: message
-        }, (notificationId) => {
-            if (chrome.runtime.lastError) {
-                const errStr = JSON.stringify(chrome.runtime.lastError, null, 2) || chrome.runtime.lastError.message;
-                console.error("Keka Helper (V2): Failed to create notification:", errStr);
-            } else {
-                console.log("Keka Helper (V2): Notification shown successfully! ID:", notificationId);
-            }
-        });
-
-    } catch (e) {
-        console.error("Keka Helper (V2): API Fetch Failed:", e);
-    }
+    console.log(`Keka Range [${startStr}→${endStr}]: gross=${totalGross.toFixed(2)}h eff=${totalEffective.toFixed(2)}h`);
+    return { totalGross, totalEffective };
 }
 
+// --- MESSAGE HANDLERS ---
 
-// Listen for the Alarm ticking
-chrome.alarms.onAlarm.addListener((alarm) => {
-    if (alarm.name === 'kekaNotifier') {
-        console.log("Keka Helper: Alarm triggered! Fetching fresh data from API...");
-        // Execute the native background fetch instead of relying on stale DOM data
-        fetchKekaData();
-    }
+chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+    const handleRequest = async () => {
+        try {
+            if (request.action === 'GET_TODAY_STATS' || request.action === 'REFRESH_DATA') {
+                const force = request.action === 'REFRESH_DATA';
+                const [data, settings] = await Promise.all([
+                    fetchAllAttendance(force),
+                    new Promise(resolve => chrome.storage.local.get(['kekaGraceEnabled'], resolve))
+                ]);
+                const stats = calculateTodayStats(data, settings.kekaGraceEnabled === true);
+                sendResponse({ success: true, stats });
+            }
+            else if (request.action === 'GET_RANGE_STATS') {
+                const stats = await calculateRangeStats(request.startDate, request.endDate);
+                sendResponse({ success: true, stats });
+            }
+            else if (request.action === 'GET_ALARM_TIME') {
+                chrome.alarms.get('kekaNotifier', (alarm) => {
+                    sendResponse({ time: alarm ? alarm.scheduledTime : null });
+                });
+            }
+            else if (request.action === 'TEST_NOTIFICATION') {
+                const [data, settings] = await Promise.all([
+                    fetchAllAttendance(false),
+                    new Promise(resolve => chrome.storage.local.get(['kekaGraceEnabled'], resolve))
+                ]);
+                const stats = calculateTodayStats(data, settings.kekaGraceEnabled === true);
+                if (stats) {
+                    const rawEodTime = stats.statusMessage.replace('Logoff at ', '');
+                    const eodTime = rawEodTime.replace(/([\u2700-\u27BF]|[\uE000-\uF8FF]|\uD83C[\uDC00-\uDFFF]|\uD83D[\uDC00-\uDFFF]|[\u2011-\u26FF]|\uD83E[\uDD10-\uDDFF])/g, '').trim();
+                    chrome.notifications.create('keka-test-' + Date.now(), {
+                        type: 'basic',
+                        iconUrl: 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', // 1x1 Transparent Pixel
+                        title: 'K-Clock',
+                        message: `EOD: ${eodTime}`
+                    });
+                    sendResponse({ success: true });
+                } else {
+                    sendResponse({ success: false, error: 'No stats' });
+                }
+            }
+        } catch (e) {
+            sendResponse({ success: false, error: e.message });
+        }
+    };
+
+    handleRequest();
+    return true; // Keep channel open
 });
 
-// Listen for messages from content.js with the latest calculations
-chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-    if (request.action === 'UPDATE_KEKA_STATUS') {
-        chrome.storage.local.set({
-            kekaLatestStatus: request.data,
-            kekaLastUpdateTime: Date.now()
-        });
-    } else if (request.action === 'GET_ALARM_TIME') {
-        chrome.alarms.get('kekaNotifier', (alarm) => {
-            if (alarm) {
-                sendResponse({ time: alarm.scheduledTime });
-            } else {
-                sendResponse({ time: null });
-            }
-        });
-        return true; // Keep the message channel open for the async response
+// Periodic Notification Trigger
+chrome.alarms.onAlarm.addListener(async (alarm) => {
+    if (alarm.name === 'kekaNotifier' && kekaAuthToken) {
+        const [data, settings] = await Promise.all([
+            fetchAllAttendance(),
+            new Promise(resolve => chrome.storage.local.get(['kekaGraceEnabled'], resolve))
+        ]);
+        if (stats) {
+            // Strip emojis from the status message
+            const rawEodTime = stats.statusMessage.replace('Logoff at ', '');
+            const eodTime = rawEodTime.replace(/([\u2700-\u27BF]|[\uE000-\uF8FF]|\uD83C[\uDC00-\uDFFF]|\uD83D[\uDC00-\uDFFF]|[\u2011-\u26FF]|\uD83E[\uDD10-\uDDFF])/g, '').trim();
+            chrome.notifications.create('keka-' + Date.now(), {
+                type: 'basic',
+                iconUrl: 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', // 1x1 Transparent Pixel
+                title: 'K-Clock',
+                message: `EOD: ${eodTime}`
+            });
+        }
     }
 });
