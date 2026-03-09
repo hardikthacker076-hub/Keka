@@ -238,11 +238,11 @@ function calculateTodayStats(allData, graceEnabled = false) {
         breakMins: breakMins / 60,
         grossLeft: finalGrossLeft,
         effectiveLeft: finalEffectiveLeft,
-        statusMessage,        // effective logoff
-        grossStatusMessage,   // gross logoff (catchup-adjusted)
+        statusMessage: statusMessage,        // effective logoff
+        grossStatusMessage: grossStatusMessage,   // gross logoff (catchup-adjusted)
         neededMins: finalEffectiveLeft * 60,
         isClockedIn,
-        catchupNote
+        catchupNote: catchupNote
     };
 }
 
