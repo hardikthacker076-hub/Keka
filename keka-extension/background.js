@@ -101,6 +101,26 @@ function getMonday(d) {
     return d;
 }
 
+function getLiveStatus(day) {
+    const now = new Date();
+    let isClockedIn = false;
+    let lastInTime = null;
+    if (day.lastLogOfTheDay) {
+        const lastLog = new Date(day.lastLogOfTheDay);
+        const lastOutRaw = day.lastOutOfTheDay;
+        const lastOut = lastOutRaw ? new Date(lastOutRaw) : null;
+        const isMissing = !lastOut || isNaN(lastOut.getTime())
+            || lastOut.getFullYear() < 2000
+            || lastLog.getTime() > lastOut.getTime();
+        if (isMissing) {
+            isClockedIn = true;
+            lastInTime = lastLog;
+        }
+    }
+    const liveMinutes = isClockedIn ? Math.max(0, Math.floor((now - lastInTime) / 60000)) : 0;
+    return { isClockedIn, liveMinutes };
+}
+
 function calculateTodayStats(allData, graceEnabled = false) {
     const now = new Date();
     const todayStr = toLocalDateStr(now);
@@ -117,25 +137,6 @@ function calculateTodayStats(allData, graceEnabled = false) {
     let liveMinutes = 0;
 
     if (!allData || !allData.data) return null;
-
-    const getLiveStatus = (day) => {
-        let isClockedIn = false;
-        let lastInTime = null;
-        if (day.lastLogOfTheDay) {
-            const lastLog = new Date(day.lastLogOfTheDay);
-            const lastOutRaw = day.lastOutOfTheDay;
-            const lastOut = lastOutRaw ? new Date(lastOutRaw) : null;
-            const isMissing = !lastOut || isNaN(lastOut.getTime())
-                || lastOut.getFullYear() < 2000
-                || lastLog.getTime() > lastOut.getTime();
-            if (isMissing) {
-                isClockedIn = true;
-                lastInTime = lastLog;
-            }
-        }
-        const liveMinutes = isClockedIn ? Math.max(0, Math.floor((now - lastInTime) / 60000)) : 0;
-        return { isClockedIn, liveMinutes };
-    };
 
     for (const day of allData.data) {
         const dStr = (day.attendanceDate || '').slice(0, 10);
@@ -246,6 +247,7 @@ function calculateTodayStats(allData, graceEnabled = false) {
 }
 
 async function calculateRangeStats(startStr, endStr) {
+    const todayStr = toLocalDateStr(new Date());
     // Single fetch — Keka returns ALL data regardless of month param
     const allData = await fetchAllAttendance();
     if (allData.success === false) return { totalGross: 0, totalEffective: 0, error: allData.error };
