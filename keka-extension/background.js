@@ -112,12 +112,28 @@ function calculateTodayStats(allData, graceEnabled = false) {
     let expectedEffPrev = 0;  // expected effective for past days
     let expectedGrossPrev = 0; // expected gross for past days (9h per working day)
     let prevGrossWorked = 0;  // actual gross worked on past days
-    let isClockedIn = false;
-    let lastInTime = null;
-    let statusMessage = '';
     let isOffDayToday = false;
 
     if (!allData || !allData.data) return null;
+
+    const getLiveStatus = (day) => {
+        let isClockedIn = false;
+        let lastInTime = null;
+        if (day.lastLogOfTheDay) {
+            const lastLog = new Date(day.lastLogOfTheDay);
+            const lastOutRaw = day.lastOutOfTheDay;
+            const lastOut = lastOutRaw ? new Date(lastOutRaw) : null;
+            const isMissing = !lastOut || isNaN(lastOut.getTime())
+                || lastOut.getFullYear() < 2000
+                || lastLog.getTime() > lastOut.getTime();
+            if (isMissing) {
+                isClockedIn = true;
+                lastInTime = lastLog;
+            }
+        }
+        const liveMinutes = isClockedIn ? Math.max(0, Math.floor((now - lastInTime) / 60000)) : 0;
+        return { isClockedIn, liveMinutes };
+    };
 
     for (const day of allData.data) {
         const dStr = (day.attendanceDate || '').slice(0, 10);
@@ -133,15 +149,9 @@ function calculateTodayStats(allData, graceEnabled = false) {
             todayGross = grossMins;
             isOffDayToday = isOffDay || isLeave;
 
-            if (day.lastLogOfTheDay) {
-                const lastLog = new Date(day.lastLogOfTheDay);
-                const lastOutRaw = day.lastOutOfTheDay;
-                const lastOut = lastOutRaw ? new Date(lastOutRaw) : null;
-                const isMissing = !lastOut || isNaN(lastOut.getTime())
-                    || lastOut.getFullYear() < 2000
-                    || lastLog.getTime() > lastOut.getTime();
-                if (isMissing) { isClockedIn = true; lastInTime = lastLog; }
-            }
+            const liveStatus = getLiveStatus(day);
+            isClockedIn = liveStatus.isClockedIn;
+            const liveMinutes = liveStatus.liveMinutes;
 
             todayEffective = effMins > 0 ? effMins : (isClockedIn ? grossMins : 0);
             weeklyEffective += todayEffective;
@@ -248,8 +258,23 @@ async function calculateRangeStats(startStr, endStr) {
     for (const day of (allData.data || [])) {
         const dStr = (day.attendanceDate || '').slice(0, 10);
         if (dStr >= startStr && dStr <= endStr) {
-            totalGross += (day.totalGrossHours || 0);
-            totalEffective += (day.totalEffectiveHours || 0);
+            let gross = (day.totalGrossHours || 0) * 60;
+            let effective = (day.totalEffectiveHours || 0) * 60;
+
+            // If this is today, add live minutes
+            if (dStr === todayStr) {
+                const liveStatus = getLiveStatus(day);
+                if (liveStatus.isClockedIn) {
+                    gross += liveStatus.liveMinutes;
+                    // If effective is already tracking (greater than zero), add live minutes to it too
+                    if (effective > 0) {
+                        effective += liveStatus.liveMinutes;
+                    }
+                }
+            }
+
+            totalGross += (gross / 60);
+            totalEffective += (effective / 60);
         }
     }
 

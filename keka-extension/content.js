@@ -941,8 +941,7 @@
                     grossEl.innerText = toHm(response.stats.totalGross);
                     effEl.innerText = toHm(response.stats.totalEffective);
                     if (response.stats.totalEffective > 0) {
-                        playSuccessSound();
-                        triggerConfetti();
+                        // Confirmation only, celebration removed to avoid confusion
                     }
                 } else {
                     const err = response?.error || 'Unknown error';
