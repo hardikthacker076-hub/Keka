@@ -835,7 +835,7 @@
             chrome.runtime.sendMessage({ action }, (response) => {
                 if (chrome.runtime.lastError || !response || !response.success) {
                     const errStr = (chrome.runtime.lastError?.message || response?.error || 'Unknown Error').toString();
-                    console.error('Keka Helper: Failed to get today stats:', errStr);
+                    console.log('Keka Helper: Update skipped (handled):', errStr);
 
                     const isAuthError = errStr.includes('401');
                     const isFetchError = errStr.includes('Failed to fetch');
@@ -932,7 +932,7 @@
             chrome.runtime.sendMessage({ action: 'GET_RANGE_STATS', startDate: start, endDate: end }, (response) => {
                 clearTimeout(timeout);
                 if (chrome.runtime.lastError) {
-                    console.error('Keka Range lastError:', chrome.runtime.lastError.message);
+                    console.log('Keka Range result (handled):', chrome.runtime.lastError.message);
                     grossEl.innerText = 'Error — reload page';
                     effEl.innerText = 'Error — reload page';
                     return;
@@ -948,7 +948,7 @@
                     const err = response?.error || 'Unknown error';
                     grossEl.innerText = `Error: ${err}`;
                     effEl.innerText = `Error: ${err}`;
-                    console.error('Keka Range failed:', err);
+                    console.log('Keka Range failed:', err);
                 }
             });
         } catch (e) {
@@ -1095,14 +1095,12 @@
             if (location.href.includes('/me/attendance/logs')) {
                 try {
                     if (!chrome.runtime || !chrome.runtime.id) {
-                        console.warn("Keka Helper: Extension unloaded. Stopping auto-refresh.");
                         clearInterval(refreshInterval);
                         return;
                     }
                     console.log("Keka Helper: Auto-refreshing calculation...");
                     calculate(true);
                 } catch (e) {
-                    console.warn("Keka Helper: Extension unloaded. Stopping auto-refresh.", e);
                     clearInterval(refreshInterval);
                 }
             }

@@ -81,8 +81,8 @@ async function fetchAllAttendance(forceRefresh = false) {
         console.log(`Keka Helper: Fetched ${json.data?.length || 0} attendance records`);
         return json;
     } catch (e) {
-        console.error('Keka Helper: Fetch failed:', e);
-        throw e;
+        console.log('Keka Helper: Fetch suppressed (likely network or auth issue):', e.message);
+        return { success: false, error: e.message };
     }
 }
 
@@ -240,10 +240,12 @@ function calculateTodayStats(allData, graceEnabled = false) {
 async function calculateRangeStats(startStr, endStr) {
     // Single fetch — Keka returns ALL data regardless of month param
     const allData = await fetchAllAttendance();
+    if (allData.success === false) return { totalGross: 0, totalEffective: 0, error: allData.error };
+
     let totalGross = 0;
     let totalEffective = 0;
 
-    for (const day of allData.data) {
+    for (const day of (allData.data || [])) {
         const dStr = (day.attendanceDate || '').slice(0, 10);
         if (dStr >= startStr && dStr <= endStr) {
             totalGross += (day.totalGrossHours || 0);
@@ -266,6 +268,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                     fetchAllAttendance(force),
                     new Promise(resolve => chrome.storage.local.get(['kekaGraceEnabled'], resolve))
                 ]);
+                if (data.success === false) {
+                    sendResponse({ success: false, error: data.error });
+                    return;
+                }
                 const stats = calculateTodayStats(data, settings.kekaGraceEnabled === true);
                 sendResponse({ success: true, stats });
             }
@@ -283,6 +289,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                     fetchAllAttendance(false),
                     new Promise(resolve => chrome.storage.local.get(['kekaGraceEnabled'], resolve))
                 ]);
+                if (data.success === false) {
+                    sendResponse({ success: false, error: data.error });
+                    return;
+                }
                 const stats = calculateTodayStats(data, settings.kekaGraceEnabled === true);
                 if (stats) {
                     const rawEodTime = stats.statusMessage.replace('Logoff at ', '');
