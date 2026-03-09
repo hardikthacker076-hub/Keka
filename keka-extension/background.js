@@ -113,6 +113,8 @@ function calculateTodayStats(allData, graceEnabled = false) {
     let expectedGrossPrev = 0; // expected gross for past days (9h per working day)
     let prevGrossWorked = 0;  // actual gross worked on past days
     let isOffDayToday = false;
+    let isClockedIn = false;
+    let liveMinutes = 0;
 
     if (!allData || !allData.data) return null;
 
@@ -151,7 +153,7 @@ function calculateTodayStats(allData, graceEnabled = false) {
 
             const liveStatus = getLiveStatus(day);
             isClockedIn = liveStatus.isClockedIn;
-            const liveMinutes = liveStatus.liveMinutes;
+            liveMinutes = liveStatus.liveMinutes;
 
             todayEffective = effMins > 0 ? effMins : (isClockedIn ? grossMins : 0);
             weeklyEffective += todayEffective;
@@ -189,10 +191,6 @@ function calculateTodayStats(allData, graceEnabled = false) {
     const grossCatchup = expectedGrossPrev - prevGrossWorked; // negative = ahead on gross
     const grossTarget = Math.max(0, 540 + grossCatchup);    // today's gross target (can be 0 if very far ahead)
 
-    let liveMinutes = 0;
-    if (isClockedIn && lastInTime) {
-        liveMinutes = Math.max(0, Math.floor((now.getTime() - lastInTime.getTime()) / 60000));
-    }
     const todayWorked = todayEffective + liveMinutes;
     const needed = Math.max(0, todayTarget - todayWorked);
     const grossNeeded = Math.max(0, grossTarget - todayGross - liveMinutes);
