@@ -888,10 +888,24 @@
                     _updatePanelData(s);
                 }
 
-                if (s.statusMessage.includes('GOAL MET') && !window.kekaCheerPlayed) {
-                    playSuccessSound();
-                    triggerConfetti();
-                    window.kekaCheerPlayed = true;
+                if (s.statusMessage.includes('GOAL MET')) {
+                    if (!window.kekaCheerPlayed) {
+                        playSuccessSound();
+                        triggerConfetti();
+                        window.kekaCheerPlayed = true;
+                    }
+                } else {
+                    window.kekaCheerPlayed = false;
+                }
+
+                if (s.catchupNote && s.catchupNote.includes('😟')) {
+                    if (!window.kekaSadPlayed) {
+                        playFailureSound();
+                        triggerSadEmoji();
+                        window.kekaSadPlayed = true;
+                    }
+                } else {
+                    window.kekaSadPlayed = false;
                 }
 
                 hasCalculated = true;

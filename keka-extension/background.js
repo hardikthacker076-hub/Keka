@@ -135,6 +135,7 @@ function calculateTodayStats(allData, graceEnabled = false) {
     let isOffDayToday = false;
     let isClockedIn = false;
     let liveMinutes = 0;
+    let statusMessage = '';
 
     if (!allData || !allData.data) return null;
 
@@ -223,7 +224,7 @@ function calculateTodayStats(allData, graceEnabled = false) {
         grossStatusMessage = `Logoff at ${gLogoff.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
     }
 
-    const catchupNote = effCatchup > 60 ? 'Catching up' : effCatchup < -60 ? 'Ahead 🎯' : isClockedIn ? 'Live ⏱' : '';
+    const catchupNote = effCatchup > 60 ? 'Catching up 😟' : effCatchup > 0 ? 'Behind 😟' : effCatchup < -60 ? 'Ahead 🎯' : isClockedIn ? 'Live ⏱' : '';
 
     // Final overrides for "Left" time when strictly off
     const finalEffectiveLeft = (isOffDayToday && todayWorked === 0 && !isClockedIn) ? 0 : (needed / 60);
