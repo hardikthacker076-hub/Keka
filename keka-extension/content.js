@@ -11,6 +11,11 @@
     let hasCalculated = false;
     let observer = null;
 
+    const extractTime = (msg) => {
+        if (!msg) return '--:--';
+        return msg.includes('Logoff') ? msg.replace('Logoff at ', '') : msg;
+    };
+
     function getMonday(d) {
         d = new Date(d);
         var day = d.getDay(),
@@ -135,6 +140,7 @@
     let _pendingBannerArgs = null;
 
     function ensureIconInDom(...args) {
+        if (_iconPlacementTimer) clearTimeout(_iconPlacementTimer);
         _pendingBannerArgs = args;
         if (!document.getElementById('keka-helper-icon')) {
             _iconPlacementAttempts = 0;
@@ -224,10 +230,10 @@
         // Always remove and re-inject styles so extension updates apply immediately
         const oldStyle = document.getElementById('keka-helper-styles');
         if (oldStyle) oldStyle.remove();
-        if (true) {
-            const style = document.createElement('style');
-            style.id = 'keka-helper-styles';
-            style.textContent = `
+
+        const style = document.createElement('style');
+        style.id = 'keka-helper-styles';
+        style.textContent = `
                 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
 
                 .keka-helper-panel {
@@ -364,8 +370,7 @@
                     border: 1px solid rgba(255,255,255,0.07);
                 }
             `;
-            document.head.appendChild(style);
-        }
+        document.head.appendChild(style);
 
         // Create dropdown panel (hidden by default)
         const panel = document.createElement('div');
@@ -756,7 +761,6 @@
     }
 
     function _updatePanelData(s) {
-        const extractTime = (msg) => msg.includes('Logoff') ? msg.replace('Logoff at ', '') : msg;
         const grossLogoff = extractTime(s.grossStatusMessage || s.statusMessage);
         const effectiveLogoff = extractTime(s.statusMessage);
         const avgNote = s.catchupNote || (s.isClockedIn ? 'Live ⏱' : '');
@@ -872,7 +876,6 @@
 
                 if (!iconExists) {
                     // First build
-                    const extractTime = (msg) => msg.includes('Logoff') ? msg.replace('Logoff at ', '') : msg;
                     createBanner(
                         extractTime(s.grossStatusMessage || s.statusMessage),
                         extractTime(s.statusMessage),
@@ -952,10 +955,22 @@
                     return;
                 }
                 if (response && response.success) {
-                    grossEl.innerText = toHm(response.stats.totalGross);
-                    effEl.innerText = toHm(response.stats.totalEffective);
-                    if (response.stats.totalEffective > 0) {
-                        // Confirmation only, celebration removed to avoid confusion
+                    const stats = response.stats;
+                    grossEl.innerText = toHm(stats.totalGross);
+                    effEl.innerText = toHm(stats.totalEffective);
+
+                    const eff = stats.totalEffective;
+                    const goal = stats.expectedEffective;
+
+                    // Trigger logical celebrations for the range
+                    if (eff > 0 && goal > 0) {
+                        if (eff >= (goal - 0.1)) { // goal met (with tiny buffer)
+                            playSuccessSound();
+                            triggerConfetti();
+                        } else if (eff < (goal - 1)) { // sad if behind by > 1h
+                            playFailureSound();
+                            triggerSadEmoji();
+                        }
                     }
                 } else {
                     const err = response?.error || 'Unknown error';

@@ -1,9 +1,11 @@
 let kekaAuthToken = null;
 const attendanceCache = new Map();
+let kekaSubdomain = 'marutitech.keka.com'; // Default fallback
 
 // Initialize token from storage
-chrome.storage.local.get(['kekaAuthToken'], (result) => {
+chrome.storage.local.get(['kekaAuthToken', 'kekaSubdomain'], (result) => {
     if (result.kekaAuthToken) kekaAuthToken = result.kekaAuthToken;
+    if (result.kekaSubdomain) kekaSubdomain = result.kekaSubdomain;
 });
 
 // Intercept Auth Token
@@ -14,8 +16,18 @@ chrome.webRequest.onSendHeaders.addListener(
                 if (header.value !== kekaAuthToken) {
                     kekaAuthToken = header.value;
                     chrome.storage.local.set({ kekaAuthToken: header.value });
+
+                    // Detect subdomain from the URL
+                    try {
+                        const url = new URL(details.url);
+                        if (url.hostname !== kekaSubdomain) {
+                            kekaSubdomain = url.hostname;
+                            chrome.storage.local.set({ kekaSubdomain: url.hostname });
+                            console.log("Keka Helper (V3): Intercepted new subdomain:", kekaSubdomain);
+                        }
+                    } catch (e) { }
+
                     console.log("Keka Helper (V3): Intercepted new Auth Token!");
-                    // Clear cache on token change just in case
                     attendanceCache.clear();
                 }
                 break;
@@ -68,7 +80,7 @@ async function fetchAllAttendance(forceRefresh = false) {
 
     // Month/year params are ignored by Keka; we just need a valid request
     const d = new Date();
-    const url = `https://marutitech.keka.com/k/attendance/api/mytime/attendance/summary?month=${d.getMonth() + 1}&year=${d.getFullYear()}`;
+    const url = `https://${kekaSubdomain}/k/attendance/api/mytime/attendance/summary?month=${d.getMonth() + 1}&year=${d.getFullYear()}`;
 
     try {
         const response = await fetch(url, {
@@ -251,14 +263,19 @@ async function calculateRangeStats(startStr, endStr) {
     const todayStr = toLocalDateStr(new Date());
     // Single fetch — Keka returns ALL data regardless of month param
     const allData = await fetchAllAttendance();
-    if (allData.success === false) return { totalGross: 0, totalEffective: 0, error: allData.error };
+    if (allData.success === false) return { totalGross: 0, totalEffective: 0, expectedEffective: 0, error: allData.error };
 
     let totalGross = 0;
     let totalEffective = 0;
+    let expectedEffectiveTotal = 0;
 
     for (const day of (allData.data || [])) {
         const dStr = (day.attendanceDate || '').slice(0, 10);
         if (dStr >= startStr && dStr <= endStr) {
+            const isOffDay = day.dayType === 1 || day.dayType === 2;
+            const isLeave = (day.leaveDetails && day.leaveDetails.length > 0)
+                || (day.leaveDayStatuses && day.leaveDayStatuses.length > 0);
+
             let gross = (day.totalGrossHours || 0) * 60;
             let effective = (day.totalEffectiveHours || 0) * 60;
 
@@ -267,20 +284,24 @@ async function calculateRangeStats(startStr, endStr) {
                 const liveStatus = getLiveStatus(day);
                 if (liveStatus.isClockedIn) {
                     gross += liveStatus.liveMinutes;
-                    // If effective is already tracking (greater than zero), add live minutes to it too
-                    if (effective > 0) {
-                        effective += liveStatus.liveMinutes;
-                    }
+                    if (effective > 0) effective += liveStatus.liveMinutes;
                 }
             }
 
             totalGross += (gross / 60);
             totalEffective += (effective / 60);
+
+            // Calculate expected effective for this range
+            if (!isOffDay && !isLeave) {
+                expectedEffectiveTotal += 8;
+            } else if (isLeave && day.attendanceDayStatus === 2) {
+                expectedEffectiveTotal += 4; // Half-day leave
+            }
         }
     }
 
-    console.log(`Keka Range [${startStr}→${endStr}]: gross=${totalGross.toFixed(2)}h eff=${totalEffective.toFixed(2)}h`);
-    return { totalGross, totalEffective };
+    console.log(`Keka Range [${startStr}→${endStr}]: gross=${totalGross.toFixed(2)}h eff=${totalEffective.toFixed(2)}h goal=${expectedEffectiveTotal}h`);
+    return { totalGross, totalEffective, expectedEffective: expectedEffectiveTotal };
 }
 
 // --- MESSAGE HANDLERS ---
@@ -350,16 +371,19 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
             fetchAllAttendance(),
             new Promise(resolve => chrome.storage.local.get(['kekaGraceEnabled'], resolve))
         ]);
-        if (stats) {
-            // Strip emojis from the status message
-            const rawEodTime = stats.statusMessage.replace('Logoff at ', '');
-            const eodTime = rawEodTime.replace(/([\u2700-\u27BF]|[\uE000-\uF8FF]|\uD83C[\uDC00-\uDFFF]|\uD83D[\uDC00-\uDFFF]|[\u2011-\u26FF]|\uD83E[\uDD10-\uDDFF])/g, '').trim();
-            chrome.notifications.create('keka-' + Date.now(), {
-                type: 'basic',
-                iconUrl: 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', // 1x1 Transparent Pixel
-                title: 'K-Clock',
-                message: `EOD: ${eodTime}`
-            });
+        if (data.success !== false) {
+            const stats = calculateTodayStats(data, settings.kekaGraceEnabled === true);
+            if (stats) {
+                // Strip emojis from the status message
+                const rawEodTime = stats.statusMessage.replace('Logoff at ', '');
+                const eodTime = rawEodTime.replace(/([\u2700-\u27BF]|[\uE000-\uF8FF]|\uD83C[\uDC00-\uDFFF]|\uD83D[\uDC00-\uDFFF]|[\u2011-\u26FF]|\uD83E[\uDD10-\uDDFF])/g, '').trim();
+                chrome.notifications.create('keka-' + Date.now(), {
+                    type: 'basic',
+                    iconUrl: 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', // 1x1 Transparent Pixel
+                    title: 'K-Clock',
+                    message: `EOD: ${eodTime}`
+                });
+            }
         }
     }
 });
