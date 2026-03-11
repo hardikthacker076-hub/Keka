@@ -841,15 +841,23 @@
                     const errStr = (chrome.runtime.lastError?.message || response?.error || 'Unknown Error').toString();
                     console.log('Keka Helper: Update skipped (handled):', errStr);
 
-                    const isAuthError = errStr.includes('401');
+                    const isAuthError = errStr.includes('401') || errStr.includes('No Auth');
                     const isFetchError = errStr.includes('Failed to fetch');
+                    const isRateLimit = errStr.includes('429');
+                    const isServerError = errStr.includes('50') || errStr.includes('API Error: 5');
 
                     let displayErr = 'API Error';
                     let detailErr = 'Check console';
 
                     if (isAuthError) {
                         displayErr = 'Login Expired';
-                        detailErr = 'Please refresh this page';
+                        detailErr = 'Open Keka to refresh auth';
+                    } else if (isRateLimit) {
+                        displayErr = 'Rate Limited';
+                        detailErr = 'Too many requests';
+                    } else if (isServerError) {
+                        displayErr = 'Server Error';
+                        detailErr = 'Keka is down, retrying...';
                     } else if (isFetchError) {
                         displayErr = 'Network Error';
                         detailErr = 'Check connection';

@@ -70,7 +70,7 @@ let allAttendanceCache = null;
 let allAttendanceCacheTime = 0;
 const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
-async function fetchAllAttendance(forceRefresh = false) {
+async function fetchAllAttendance(forceRefresh = false, retries = 1) {
     if (!kekaAuthToken) throw new Error('No Auth Token — visit Keka to capture it');
 
     const now = Date.now();
@@ -86,13 +86,25 @@ async function fetchAllAttendance(forceRefresh = false) {
         const response = await fetch(url, {
             headers: { 'Authorization': kekaAuthToken, 'Accept': 'application/json' }
         });
-        if (!response.ok) throw new Error(`API Error: ${response.status}`);
+        if (!response.ok) {
+            if (response.status >= 500 && retries > 0) {
+                console.log(`Keka Helper: API returned ${response.status}, retrying in 1s...`);
+                await new Promise(resolve => setTimeout(resolve, 1000));
+                return fetchAllAttendance(true, retries - 1);
+            }
+            throw new Error(`API Error: ${response.status}`);
+        }
         const json = await response.json();
         allAttendanceCache = json;
         allAttendanceCacheTime = now;
         console.log(`Keka Helper: Fetched ${json.data?.length || 0} attendance records`);
         return json;
     } catch (e) {
+        if (e.message.includes('Failed to fetch') && retries > 0) {
+            console.log(`Keka Helper: Network error, retrying in 1s...`);
+            await new Promise(resolve => setTimeout(resolve, 1000));
+            return fetchAllAttendance(true, retries - 1);
+        }
         console.log('Keka Helper: Fetch suppressed (likely network or auth issue):', e.message);
         return { success: false, error: e.message };
     }
