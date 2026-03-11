@@ -891,24 +891,25 @@
                     _updatePanelData(s);
                 }
 
+                // Get today's local date string
+                const todayStr = new Date().toLocaleDateString();
+
                 if (s.statusMessage.includes('GOAL MET')) {
-                    if (!window.kekaCheerPlayed) {
+                    const lastCheer = localStorage.getItem('kekaLastCheerDate');
+                    if (lastCheer !== todayStr) {
                         playSuccessSound();
                         triggerConfetti();
-                        window.kekaCheerPlayed = true;
+                        localStorage.setItem('kekaLastCheerDate', todayStr);
                     }
-                } else {
-                    window.kekaCheerPlayed = false;
                 }
 
                 if (s.catchupNote && s.catchupNote.includes('😟')) {
-                    if (!window.kekaSadPlayed) {
+                    const lastSad = localStorage.getItem('kekaLastSadDate');
+                    if (lastSad !== todayStr) {
                         playFailureSound();
                         triggerSadEmoji();
-                        window.kekaSadPlayed = true;
+                        localStorage.setItem('kekaLastSadDate', todayStr);
                     }
-                } else {
-                    window.kekaSadPlayed = false;
                 }
 
                 hasCalculated = true;
