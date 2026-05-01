@@ -145,6 +145,74 @@ function getLiveStatus(day) {
     return { isClockedIn, liveMinutes };
 }
 
+// Keywords that identify a WFH request inside leaveDetails — these are NOT actual leave
+const WFH_LEAVE_KEYWORDS = ['work from home', 'wfh', 'remote work', 'work remotely', 'remote'];
+
+function getDayExpectations(day) {
+    const isOffDay = day.dayType === 1 || day.dayType === 2;
+
+    // Filter out WFH requests from leaveDetails — they look like leave but aren't
+    const allLeaveDetails = Array.isArray(day.leaveDetails) ? day.leaveDetails : [];
+    const realLeaveDetails = allLeaveDetails.filter(d => {
+        const name = (d.leaveTypeName || '').toLowerCase();
+        return !WFH_LEAVE_KEYWORDS.some(kw => name.includes(kw));
+    });
+    const hasLeaveDetails = realLeaveDetails.length > 0;
+    const hasLeaveStatuses = Array.isArray(day.leaveDayStatuses) && day.leaveDayStatuses.length > 0;
+    const attendanceStatus = Number(day.attendanceDayStatus || 0);
+    const isWfhDay = day.isFullyWorkedOnWorkingRemotelyDay === true
+        || allLeaveDetails.some(d => WFH_LEAVE_KEYWORDS.some(kw => (d.leaveTypeName || '').toLowerCase().includes(kw)))
+        || [day.timeEntries, day.originalTimeEntries, day.locationTimeEntries].some(entries =>
+            Array.isArray(entries) && entries.some(entry => entry && entry.premiseName === 'WFH')
+        );
+    const leaveStatusCodes = [
+        ...(hasLeaveStatuses ? day.leaveDayStatuses : []),
+        ...realLeaveDetails.map(detail => detail.leaveDayStatus)
+    ].map(code => Number(code));
+
+    const isHalfDayLeave = (leaveStatusCodes.includes(2) || leaveStatusCodes.includes(3) || day.isFirstHalfLeave === true || day.leaveDayDuration === 0.5)
+        || (attendanceStatus === 2 && !isWfhDay && (hasLeaveDetails || hasLeaveStatuses));
+    const isLeave = hasLeaveDetails || hasLeaveStatuses || isHalfDayLeave;
+
+    if (isOffDay) {
+        return {
+            isOffDay: true,
+            isLeave: false,
+            isHalfDayLeave: false,
+            expectedEffectiveMins: 0,
+            expectedGrossMins: 0
+        };
+    }
+
+    if (isHalfDayLeave) {
+        return {
+            isOffDay: false,
+            isLeave: true,
+            isHalfDayLeave: true,
+            expectedEffectiveMins: 240,
+            expectedGrossMins: 270
+        };
+    }
+
+    if (isLeave) {
+        return {
+            isOffDay: false,
+            isLeave: true,
+            isHalfDayLeave: false,
+            expectedEffectiveMins: 0,
+            expectedGrossMins: 0
+        };
+    }
+
+    return {
+        isOffDay: false,
+        isLeave: false,
+        isHalfDayLeave: false,
+        expectedEffectiveMins: 480,
+        expectedGrossMins: 540
+    };
+}
+
 function calculateTodayStats(allData, graceEnabled = false) {
     const now = new Date();
     const todayStr = toLocalDateStr(now);
@@ -153,10 +221,12 @@ function calculateTodayStats(allData, graceEnabled = false) {
     let weeklyEffective = 0;
     let todayEffective = 0;
     let todayGross = 0;
+    let todayExpectedEff = 480;
+    let todayExpectedGross = 540;
     let expectedEffPrev = 0;  // expected effective for past days
     let expectedGrossPrev = 0; // expected gross for past days (9h per working day)
     let prevGrossWorked = 0;  // actual gross worked on past days
-    let isOffDayToday = false;
+    let isZeroExpectationToday = false;
     let isClockedIn = false;
     let liveMinutes = 0;
     let statusMessage = '';
@@ -167,15 +237,15 @@ function calculateTodayStats(allData, graceEnabled = false) {
         const dStr = (day.attendanceDate || '').slice(0, 10);
         if (dStr < mondayStr) continue;
 
-        const isOffDay = day.dayType === 1 || day.dayType === 2;
-        const isLeave = (day.leaveDetails && day.leaveDetails.length > 0)
-            || (day.leaveDayStatuses && day.leaveDayStatuses.length > 0);
+        const dayExpectations = getDayExpectations(day);
         const effMins = Math.round((day.totalEffectiveHours || 0) * 60);
         const grossMins = Math.round((day.totalGrossHours || 0) * 60);
 
         if (dStr === todayStr) {
             todayGross = grossMins;
-            isOffDayToday = isOffDay || isLeave;
+            todayExpectedEff = dayExpectations.expectedEffectiveMins;
+            todayExpectedGross = dayExpectations.expectedGrossMins;
+            isZeroExpectationToday = todayExpectedEff === 0 && todayExpectedGross === 0;
 
             const liveStatus = getLiveStatus(day);
             isClockedIn = liveStatus.isClockedIn;
@@ -190,14 +260,10 @@ function calculateTodayStats(allData, graceEnabled = false) {
             const pastEff = effMins > 0 ? effMins : grossMins;
             weeklyEffective += pastEff;
 
-            if (!isOffDay && !isLeave) {
-                expectedEffPrev += 480;           // 8h effective expected
-                expectedGrossPrev += 540;           // 9h gross expected
+            if (dayExpectations.expectedEffectiveMins > 0 || dayExpectations.expectedGrossMins > 0) {
+                expectedEffPrev += dayExpectations.expectedEffectiveMins;
+                expectedGrossPrev += dayExpectations.expectedGrossMins;
                 prevGrossWorked += grossMins;     // actual gross worked
-            } else if (isLeave && day.attendanceDayStatus === 2) {
-                expectedEffPrev += 240;           // half-day leave
-                expectedGrossPrev += 270;           // half-day gross expected
-                prevGrossWorked += grossMins;
             }
         }
     }
@@ -211,11 +277,11 @@ function calculateTodayStats(allData, graceEnabled = false) {
         effCatchup -= 14;
     }
 
-    const todayTarget = Math.max(0, 480 + effCatchup);
+    const todayTarget = Math.max(0, todayExpectedEff + effCatchup);
 
     // Gross catchup (independent from effective)
     const grossCatchup = expectedGrossPrev - prevGrossWorked; // negative = ahead on gross
-    const grossTarget = Math.max(0, 540 + grossCatchup);    // today's gross target (can be 0 if very far ahead)
+    const grossTarget = Math.max(0, todayExpectedGross + grossCatchup);    // today's gross target (can be 0 if very far ahead)
 
     const todayWorked = todayEffective + liveMinutes;
     const needed = Math.max(0, todayTarget - todayWorked);
@@ -224,7 +290,7 @@ function calculateTodayStats(allData, graceEnabled = false) {
     console.log(`Keka: effCatchup=${effCatchup}m grossCatchup=${grossCatchup}m | eff target=${todayTarget}m needed=${needed}m | gross target=${grossTarget}m needed=${grossNeeded}m`);
 
     // Effective status message
-    if (isOffDayToday && todayWorked === 0 && !isClockedIn) {
+    if (isZeroExpectationToday && todayWorked === 0 && !isClockedIn) {
         statusMessage = 'On Leave / Day Off! 🎉';
     } else if (todayWorked === 0 && !isClockedIn) {
         statusMessage = 'Yet to Start ⏳';
@@ -237,7 +303,7 @@ function calculateTodayStats(allData, graceEnabled = false) {
 
     // Gross status message (separate, catchup-adjusted)
     let grossStatusMessage;
-    if (isOffDayToday && todayGross === 0 && !isClockedIn) {
+    if (isZeroExpectationToday && todayGross === 0 && !isClockedIn) {
         grossStatusMessage = 'On Leave / Day Off! 🎉';
     } else if (todayGross === 0 && liveMinutes === 0 && !isClockedIn) {
         grossStatusMessage = 'Yet to Start ⏳';
@@ -251,8 +317,8 @@ function calculateTodayStats(allData, graceEnabled = false) {
     const catchupNote = effCatchup > 60 ? 'Catching up 😟' : effCatchup > 0 ? 'Behind 😟' : effCatchup < -60 ? 'Ahead 🎯' : isClockedIn ? 'Live ⏱' : '';
 
     // Final overrides for "Left" time when strictly off
-    const finalEffectiveLeft = (isOffDayToday && todayWorked === 0 && !isClockedIn) ? 0 : (needed / 60);
-    const finalGrossLeft = (isOffDayToday && todayGross === 0 && !isClockedIn) ? 0 : (grossNeeded / 60);
+    const finalEffectiveLeft = (isZeroExpectationToday && todayWorked === 0 && !isClockedIn) ? 0 : (needed / 60);
+    const finalGrossLeft = (isZeroExpectationToday && todayGross === 0 && !isClockedIn) ? 0 : (grossNeeded / 60);
 
     // Calculate Break Time (Gross - Effective)
     const breakMins = Math.max(0, (todayGross + liveMinutes) - todayWorked);
@@ -284,9 +350,7 @@ async function calculateRangeStats(startStr, endStr) {
     for (const day of (allData.data || [])) {
         const dStr = (day.attendanceDate || '').slice(0, 10);
         if (dStr >= startStr && dStr <= endStr) {
-            const isOffDay = day.dayType === 1 || day.dayType === 2;
-            const isLeave = (day.leaveDetails && day.leaveDetails.length > 0)
-                || (day.leaveDayStatuses && day.leaveDayStatuses.length > 0);
+            const dayExpectations = getDayExpectations(day);
 
             let gross = (day.totalGrossHours || 0) * 60;
             let effective = (day.totalEffectiveHours || 0) * 60;
@@ -303,12 +367,7 @@ async function calculateRangeStats(startStr, endStr) {
             totalGross += (gross / 60);
             totalEffective += (effective / 60);
 
-            // Calculate expected effective for this range
-            if (!isOffDay && !isLeave) {
-                expectedEffectiveTotal += 8;
-            } else if (isLeave && day.attendanceDayStatus === 2) {
-                expectedEffectiveTotal += 4; // Half-day leave
-            }
+            expectedEffectiveTotal += (dayExpectations.expectedEffectiveMins / 60);
         }
     }
 
