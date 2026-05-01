@@ -145,22 +145,33 @@ function getLiveStatus(day) {
     return { isClockedIn, liveMinutes };
 }
 
+// Keywords that identify a WFH request inside leaveDetails — these are NOT actual leave
+const WFH_LEAVE_KEYWORDS = ['work from home', 'wfh', 'remote work', 'work remotely', 'remote'];
+
 function getDayExpectations(day) {
     const isOffDay = day.dayType === 1 || day.dayType === 2;
-    const hasLeaveDetails = Array.isArray(day.leaveDetails) && day.leaveDetails.length > 0;
+
+    // Filter out WFH requests from leaveDetails — they look like leave but aren't
+    const allLeaveDetails = Array.isArray(day.leaveDetails) ? day.leaveDetails : [];
+    const realLeaveDetails = allLeaveDetails.filter(d => {
+        const name = (d.leaveTypeName || '').toLowerCase();
+        return !WFH_LEAVE_KEYWORDS.some(kw => name.includes(kw));
+    });
+    const hasLeaveDetails = realLeaveDetails.length > 0;
     const hasLeaveStatuses = Array.isArray(day.leaveDayStatuses) && day.leaveDayStatuses.length > 0;
     const attendanceStatus = Number(day.attendanceDayStatus || 0);
     const isWfhDay = day.isFullyWorkedOnWorkingRemotelyDay === true
+        || allLeaveDetails.some(d => WFH_LEAVE_KEYWORDS.some(kw => (d.leaveTypeName || '').toLowerCase().includes(kw)))
         || [day.timeEntries, day.originalTimeEntries, day.locationTimeEntries].some(entries =>
             Array.isArray(entries) && entries.some(entry => entry && entry.premiseName === 'WFH')
         );
     const leaveStatusCodes = [
         ...(hasLeaveStatuses ? day.leaveDayStatuses : []),
-        ...(hasLeaveDetails ? day.leaveDetails.map(detail => detail.leaveDayStatus) : [])
+        ...realLeaveDetails.map(detail => detail.leaveDayStatus)
     ].map(code => Number(code));
 
-    const isHalfDayLeave = leaveStatusCodes.includes(3)
-        || (attendanceStatus === 2 && !isWfhDay);
+    const isHalfDayLeave = (leaveStatusCodes.includes(2) || leaveStatusCodes.includes(3) || day.isFirstHalfLeave === true || day.leaveDayDuration === 0.5)
+        || (attendanceStatus === 2 && !isWfhDay && (hasLeaveDetails || hasLeaveStatuses));
     const isLeave = hasLeaveDetails || hasLeaveStatuses || isHalfDayLeave;
 
     if (isOffDay) {

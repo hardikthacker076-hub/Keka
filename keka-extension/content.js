@@ -971,12 +971,12 @@
                     const eff = stats.totalEffective;
                     const goal = stats.expectedEffective;
 
-                    // Trigger logical celebrations for the range
+                    // Celebrate based on actual vs expected — now with correct WFH-aware goals
                     if (eff > 0 && goal > 0) {
-                        if (eff >= (goal - 0.1)) { // goal met (with tiny buffer)
+                        if (eff >= (goal - 0.1)) {
                             playSuccessSound();
                             triggerConfetti();
-                        } else if (eff < (goal - 1)) { // sad if behind by > 1h
+                        } else if (eff < goal) {
                             playFailureSound();
                             triggerSadEmoji();
                         }
